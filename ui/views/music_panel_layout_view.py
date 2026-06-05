@@ -17,7 +17,6 @@ from ui.views.music_panel_support import (
     edit_music_panel,
     refresh_panel_message,
     _accent_int,
-    _logo_files_and_thumb,
 )
 from ui.views.music_search_view import MusicSearchView
 
@@ -377,7 +376,6 @@ class MusicPanelLayoutView(discord.ui.LayoutView):
     ) -> None:
         super().__init__(timeout=900)
         self.state = state
-        self.logo_files, logo_thumb = _logo_files_and_thumb(interaction, state.bot)
 
         title_md, status_md, queue_md, dashboard_md, artwork_url = build_panel_markdown(state)
         session_state = state.session.state_dict()
@@ -387,18 +385,15 @@ class MusicPanelLayoutView(discord.ui.LayoutView):
         queue = session_state.get("queue") or []
 
         inner: list = []
-        thumb_desc = (ConfigManager.get("FOOTER") or "Artwork")[:256]
         thumb_media: str | None = None
         if artwork_url and artwork_url.startswith(("http://", "https://")):
             thumb_media = artwork_url
-        elif logo_thumb:
-            thumb_media = logo_thumb
 
         if thumb_media:
             inner.append(
                 discord.ui.Section(
                     discord.ui.TextDisplay(title_md),
-                    accessory=discord.ui.Thumbnail(thumb_media, description=thumb_desc),
+                    accessory=discord.ui.Thumbnail(thumb_media, description="Now playing"),
                 )
             )
         else:

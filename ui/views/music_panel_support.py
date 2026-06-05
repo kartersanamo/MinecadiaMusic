@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import discord
 from discord.ext import commands
@@ -38,22 +37,6 @@ def _format_ms(ms: int) -> str:
 
 def _accent_int() -> int:
     return discord.Color.from_str(ConfigManager.get("EMBED_COLOR")).value
-
-
-def _logo_files_and_thumb(
-    interaction: discord.Interaction | None,
-    bot: commands.Bot,
-) -> tuple[list[discord.File], str | None]:
-    logo_path = ConfigManager.get("LOGO")
-    logo_url = bot.app.embeds.get_logo_url(logo_path)
-    files: list[discord.File] = []
-    if logo_url and logo_url.startswith("attachment://") and logo_path and os.path.isfile(logo_path):
-        fname = os.path.basename(logo_path)
-        files.append(discord.File(logo_path, filename=fname))
-        return files, f"attachment://{fname}"
-    if logo_url and logo_url.startswith(("http://", "https://")):
-        return files, logo_url
-    return files, None
 
 
 def build_panel_markdown(state: MusicPanelState) -> tuple[str, str, str, str, str | None]:
@@ -129,8 +112,6 @@ async def edit_music_panel(interaction: discord.Interaction, state: MusicPanelSt
 
     view = MusicPanelLayoutView(interaction, state)
     kwargs: dict[str, Any] = {"content": None, "embed": None, "view": view}
-    if view.logo_files:
-        kwargs["attachments"] = view.logo_files
     if interaction.response.is_done():
         await interaction.edit_original_response(**kwargs)
     else:
@@ -162,11 +143,7 @@ async def refresh_panel_message(
 
     try:
         view = MusicPanelLayoutView(None, state)
-        kwargs: dict[str, Any] = {"content": None, "embed": None, "view": view}
-        if view.logo_files:
-            await msg.edit(**kwargs, attachments=view.logo_files)
-        else:
-            await msg.edit(**kwargs)
+        await msg.edit(content=None, embed=None, view=view)
     except discord.HTTPException:
         session.clear_panel_binding()
 

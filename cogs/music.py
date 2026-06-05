@@ -45,10 +45,12 @@ class Music(commands.Cog):
                 notice="Use the controls below to play and manage music.",
             )
             view = MusicPanelLayoutView(interaction, state)
-            kwargs: dict = {"content": None, "embed": None, "view": view}
-            if view.logo_files:
-                kwargs["files"] = view.logo_files
-            msg = await interaction.followup.send(**kwargs, wait=True)
+            msg = await interaction.followup.send(
+                content=None,
+                embed=None,
+                view=view,
+                wait=True,
+            )
             session.bind_panel_message(msg, interaction.user.id)
         except UserFacingError as exc:
             await interaction.followup.send(
@@ -56,7 +58,7 @@ class Music(commands.Cog):
                 ephemeral=True,
             )
         except Exception as exc:
-            log_exception(log_commands, exc, bot_name="Utilities", interaction=interaction)
+            log_exception(log_commands, exc, bot_name="Music", interaction=interaction)
             await interaction.followup.send(
                 embed=_embed("Music", "Something went wrong. Please try again later.", self.bot),
                 ephemeral=True,

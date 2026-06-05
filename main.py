@@ -45,19 +45,21 @@ class Client(commands.Bot):
 
     @task("Sync Command Tree")
     async def sync_command_tree(self) -> list[discord.app_commands.AppCommand]:
-        app_id = self.application_id
         guild_id = os.getenv("DISCORD_GUILD_ID", "").strip()
-        if guild_id.isdigit() and app_id:
+        if guild_id.isdigit() and self.application_id:
             gid = int(guild_id)
             guild = discord.Object(id=gid)
             self.tree.clear_commands(guild=guild)
             self.tree.copy_global_to(guild=guild)
-            guild_cmds = await self.tree.sync(guild=guild)
+            synced = await self.tree.sync(guild=guild)
             log_tasks.info(
                 "Guild-synced %s commands to guild %s",
-                len(guild_cmds),
+                len(synced),
                 guild_id,
             )
+            self.tree.clear_commands(guild=None)
+            await self.tree.sync()
+            return synced
         synced = await self.tree.sync()
         command_list = ", ".join(c.name for c in synced)
         log_tasks.info("Globally synced %s commands: %s", len(synced), command_list)
@@ -130,21 +132,6 @@ async def cog_autocomplete(_: discord.Interaction, current: str):
 @app_commands.autocomplete(cog=cog_autocomplete)
 async def musicreload(interaction: discord.Interaction, cog: str):
     await music_reload_command(interaction, cog)
-
-
-@client.tree.command(
-    name="music-sync",
-    description="Re-register slash commands with Discord (fixes signature mismatches)",
-)
-@app_commands.checks.has_any_role(*ConfigManager.all()["ADMIN_ROLES"])
-async def musicsync(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    synced = await client.sync_command_tree()
-    await interaction.followup.send(
-        f"Synced **{len(synced)}** global commands with Discord. "
-        "Use **`/music`** for the music player panel.",
-        ephemeral=True,
-    )
 
 
 TOKEN = os.getenv("DISCORD_TOKEN")

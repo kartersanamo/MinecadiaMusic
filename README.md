@@ -37,7 +37,7 @@ Or use `docker/lavalink-compose.yml`. See `lavalink/application.yml.example`.
 1. Create a **new Discord application** for this bot; enable Server Members Intent and voice permissions.
 2. Copy Lavalink/OAuth vars from the old Utilities `.env` if migrating.
 3. Stop Utilities (or anything on port 8790), start MinecadiaMusic with `./run.sh`.
-4. Run **`/music-sync`** once to register slash commands.
+4. Restart the bot — slash commands sync on startup (`DISCORD_GUILD_ID` enables instant guild sync).
 5. Restart Utilities and run **`/utilities-sync`** to remove the old `/music` command from that app.
 6. Add a tmux pane for MinecadiaMusic alongside the other bots.
 7. nginx (`nginx/music.kartersanamo.com.conf`) still proxies to `127.0.0.1:8790`.
@@ -45,4 +45,3 @@ Or use `docker/lavalink-compose.yml`. See `lavalink/application.yml.example`.
 ## Admin commands
 
 - `/music-reload` — reload a cog
-- `/music-sync` — re-sync slash commands with Discord
