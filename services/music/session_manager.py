@@ -1,0 +1,460 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import secrets
+import time
+import uuid
+from collections.abc import Awaitable, Callable
+from typing import Any, Optional
+
+import discord
+import wavelink
+from discord.ext import commands
+from wavelink.enums import AutoPlayMode, QueueMode
+from wavelink.exceptions import QueueEmpty
+
+from core.errors.exceptions import UserFacingError
+from core.config import ConfigManager
+from services.music.permissions import can_control, can_queue, require_voice
+from services.music.queue import LoopMode, TrackInfo
+from services.music.resolver import resolve_query
+
+log = logging.getLogger("Music")
+
+
+def _music_cfg() -> dict:
+    return ConfigManager.all().get("MUSIC", {})
+
+
+class GuildMusicSession:
+    def __init__(self, guild_id: int, manager: "MusicSessionManager"):
+        self.guild_id = guild_id
+        self.manager = manager
+        self.session_id = str(uuid.uuid4())
+        self.session_token = secrets.token_urlsafe(32)
+        self.created_at = time.time()
+        self.panel_creator_id: Optional[int] = None
+        self.text_channel_id: Optional[int] = None
+        self.panel_message: Optional[discord.Message] = None
+        self.panel_owner_id: Optional[int] = None
+        self._panel_refresh_task: Optional[asyncio.Task] = None
+        self.loop_mode = LoopMode.OFF
+        self._last_track: Optional[wavelink.Playable] = None
+        self._ws_callbacks: list[Callable[[], Awaitable[None] | None]] = []
+        self.oauth_users: dict[int, float] = {}
+
+    def is_expired(self) -> bool:
+        ttl = int(os.getenv("MUSIC_SESSION_TTL_SECONDS", "86400"))
+        return time.time() - self.created_at > ttl
+
+    def refresh_panel(self, user_id: int) -> str:
+        old_id = self.session_id
+        self.session_id = str(uuid.uuid4())
+        self.session_token = secrets.token_urlsafe(32)
+        self.created_at = time.time()
+        self.panel_creator_id = user_id
+        self.manager._by_session_id.pop(old_id, None)
+        self.manager._by_session_id[self.session_id] = self
+        return self.public_url()
+
+    def public_url(self) -> str:
+        base = os.getenv("MUSIC_PUBLIC_BASE_URL", "http://127.0.0.1:8790").rstrip("/")
+        return f"{base}/{self.session_id}?token={self.session_token}"
+
+    def subscribe(self, cb: Callable[[], Awaitable[None] | None]) -> None:
+        self._ws_callbacks.append(cb)
+
+    def bind_panel_message(self, message: discord.Message, owner_id: int) -> None:
+        self.panel_message = message
+        self.panel_owner_id = owner_id
+
+    def clear_panel_binding(self) -> None:
+        self.panel_message = None
+        self.panel_owner_id = None
+        if self._panel_refresh_task and not self._panel_refresh_task.done():
+            self._panel_refresh_task.cancel()
+        self._panel_refresh_task = None
+
+    def _schedule_panel_refresh(self) -> None:
+        if not self.panel_message:
+            return
+        if self._panel_refresh_task and not self._panel_refresh_task.done():
+            self._panel_refresh_task.cancel()
+        self._panel_refresh_task = asyncio.create_task(self._debounced_panel_refresh())
+
+    async def _debounced_panel_refresh(self) -> None:
+        try:
+            await asyncio.sleep(1.0)
+            from ui.views.music_panel_support import refresh_bound_panel
+
+            await refresh_bound_panel(self, self.manager.bot)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            log.debug("Panel refresh failed", exc_info=True)
+
+    async def notify(self) -> None:
+        for cb in list(self._ws_callbacks):
+            try:
+                result = cb()
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                log.debug("WebSocket notify callback failed", exc_info=True)
+        self._schedule_panel_refresh()
+
+    def get_player(self) -> Optional[wavelink.Player]:
+        guild = self.manager.bot.get_guild(self.guild_id)
+        if not guild or not guild.voice_client:
+            return None
+        if isinstance(guild.voice_client, wavelink.Player):
+            return guild.voice_client
+        return None
+
+    async def ensure_player(self, channel: discord.VoiceChannel) -> wavelink.Player:
+        guild = channel.guild
+        player = self.get_player()
+
+        if player:
+            if player.channel and player.channel.id != channel.id:
+                await player.move_to(channel)
+            player.autoplay = AutoPlayMode.partial
+            self._sync_queue_mode(player)
+            return player
+
+        vc = guild.voice_client
+        if vc and not isinstance(vc, wavelink.Player):
+            await vc.disconnect(force=True)
+
+        player = await channel.connect(cls=wavelink.Player, self_deaf=True)
+        vol = int(_music_cfg().get("DEFAULT_VOLUME", 100))
+        await player.set_volume(vol)
+        player.autoplay = AutoPlayMode.partial
+        self._sync_queue_mode(player)
+        return player
+
+    def _sync_queue_mode(self, player: wavelink.Player) -> None:
+        if self.loop_mode == LoopMode.TRACK:
+            player.queue.mode = QueueMode.loop
+        elif self.loop_mode == LoopMode.QUEUE:
+            player.queue.mode = QueueMode.loop_all
+        else:
+            player.queue.mode = QueueMode.normal
+
+    async def _play_next_queued(self, player: wavelink.Player) -> None:
+        if player.queue.is_empty:
+            return
+        try:
+            track = player.queue.get()
+        except QueueEmpty:
+            return
+        await player.play(track, replace=True)
+
+    def state_dict(self) -> dict[str, Any]:
+        player = self.get_player()
+        current = None
+        queue_items: list[dict] = []
+        position = 0
+        paused = False
+        playing = False
+        volume = int(_music_cfg().get("DEFAULT_VOLUME", 100))
+        channel_name = None
+
+        if player:
+            paused = player.paused
+            playing = player.playing
+            volume = player.volume or volume
+            if player.channel:
+                channel_name = player.channel.name
+            if player.current:
+                current = TrackInfo.from_playable(player.current).to_dict()
+                position = player.position or 0
+            for t in player.queue:
+                queue_items.append(TrackInfo.from_playable(t).to_dict())
+
+        return {
+            "guildId": str(self.guild_id),
+            "sessionId": self.session_id,
+            "loopMode": self.loop_mode.value,
+            "current": current,
+            "queue": queue_items,
+            "positionMs": position,
+            "paused": paused,
+            "playing": playing,
+            "volume": volume,
+            "voiceChannel": channel_name,
+            "panelUrl": self.public_url(),
+        }
+
+    async def add_tracks(
+        self,
+        tracks: list[wavelink.Playable],
+        requester_id: int,
+    ) -> tuple[int, bool]:
+        if not tracks:
+            raise UserFacingError("No tracks to add.")
+        player = self.get_player()
+        if not player:
+            raise UserFacingError("Bot is not connected to a voice channel. Use **`/music`** and tap **Join VC**.")
+
+        max_len = int(_music_cfg().get("MAX_QUEUE_LENGTH", 200))
+        if len(player.queue) + len(tracks) > max_len:
+            raise UserFacingError(f"Queue cannot exceed {max_len} tracks.")
+
+        for t in tracks:
+            t.extras = {"requester_id": requester_id}
+
+        started = False
+        if not player.playing and not player.current:
+            await player.play(tracks[0])
+            for t in tracks[1:]:
+                player.queue.put(t)
+            started = True
+        else:
+            for t in tracks:
+                player.queue.put(t)
+
+        await self.notify()
+        return len(tracks), started
+
+    async def play_query(self, member: discord.Member, query: str) -> str:
+        channel = require_voice(member)
+        if not channel:
+            raise UserFacingError("Join a voice channel first.")
+        await self.ensure_player(channel)
+        result = await resolve_query(query)
+        tracks: list[wavelink.Playable] = []
+        if isinstance(result, list):
+            tracks = result[:1]
+        else:
+            tracks = list(result.tracks)
+        count, started = await self.add_tracks(tracks, member.id)
+        if started:
+            return f"Now playing **{tracks[0].title}**."
+        return f"Added **{tracks[0].title}** to the queue ({count} track(s))."
+
+    async def pause(self) -> str:
+        player = self.get_player()
+        if not player:
+            raise UserFacingError("Not connected to voice.")
+        if not player.playing:
+            return "Nothing is playing."
+        if player.paused:
+            return "Playback is already paused."
+        await player.pause(True)
+        await self.notify()
+        return "Paused playback."
+
+    async def resume(self) -> str:
+        player = self.get_player()
+        if not player:
+            raise UserFacingError("Not connected to voice.")
+        if not player.paused:
+            return "Playback is already running."
+        await player.pause(False)
+        await self.notify()
+        return "Resumed playback."
+
+    async def skip(self) -> str:
+        player = self.get_player()
+        if not player:
+            raise UserFacingError("Not connected to voice.")
+        skipped = await player.skip(force=True)
+        await self._play_next_queued(player)
+        await self.notify()
+        if skipped:
+            return f"Skipped **{skipped.title}**."
+        return "Skipped."
+
+    async def stop(self) -> str:
+        player = self.get_player()
+        if player:
+            player.queue.clear()
+            await player.stop()
+            await player.disconnect()
+        self.loop_mode = LoopMode.OFF
+        self._last_track = None
+        await self.notify()
+        self.clear_panel_binding()
+        return "Stopped and disconnected."
+
+    async def set_volume(self, level: int) -> str:
+        player = self.get_player()
+        if not player:
+            raise UserFacingError("Not connected to voice.")
+        level = max(0, min(150, level))
+        await player.set_volume(level)
+        await self.notify()
+        return f"Volume set to **{level}%**."
+
+    async def shuffle_queue(self) -> str:
+        player = self.get_player()
+        if not player or player.queue.is_empty:
+            raise UserFacingError("Queue is empty.")
+        import random
+
+        items = list(player.queue)
+        random.shuffle(items)
+        player.queue.clear()
+        for t in items:
+            player.queue.put(t)
+        await self.notify()
+        return "Shuffled the queue."
+
+    async def remove_at(self, index: int) -> str:
+        player = self.get_player()
+        if not player:
+            raise UserFacingError("Not connected.")
+        if index < 0 or index >= len(player.queue):
+            raise UserFacingError("Invalid queue position.")
+        removed = player.queue.peek(index)
+        player.queue.delete(index)
+        await self.notify()
+        return f"Removed **{removed.title}** from the queue."
+
+    async def move_track(self, from_index: int, to_index: int) -> str:
+        player = self.get_player()
+        if not player:
+            raise UserFacingError("Not connected.")
+        track = player.queue.peek(from_index)
+        player.queue.delete(from_index)
+        player.queue.put_at(to_index, track)
+        await self.notify()
+        return f"Moved **{track.title}**."
+
+    async def set_loop(self, mode: LoopMode) -> str:
+        self.loop_mode = mode
+        player = self.get_player()
+        if player:
+            self._sync_queue_mode(player)
+        await self.notify()
+        return f"Loop mode set to **{mode.value}**."
+
+    async def handle_track_end(self, player: wavelink.Player, track: wavelink.Playable) -> None:
+        if player.queue.is_empty and not player.playing:
+            idle = int(_music_cfg().get("IDLE_DISCONNECT_SECONDS", 300))
+            await asyncio.sleep(idle)
+            if player.queue.is_empty and not player.playing:
+                await player.disconnect()
+        await self.notify()
+
+
+class MusicSessionManager:
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.sessions: dict[int, GuildMusicSession] = {}
+        self._by_session_id: dict[str, GuildMusicSession] = {}
+        self._lavalink_ready = False
+
+    async def connect_lavalink(self) -> None:
+        if self._lavalink_ready:
+            return
+        host = os.getenv("LAVALINK_HOST", "127.0.0.1")
+        port = int(os.getenv("LAVALINK_PORT", "2333"))
+        password = os.getenv("LAVALINK_PASSWORD", "youshallnotpass")
+        uri = f"http://{host}:{port}"
+        try:
+            node = wavelink.Node(
+                uri=uri,
+                password=password,
+                inactive_channel_tokens=None,
+            )
+            await wavelink.Pool.connect(client=self.bot, nodes=[node])
+            self._lavalink_ready = True
+            log.info("Connected to Lavalink at %s", uri)
+        except Exception as exc:
+            log.error("Failed to connect to Lavalink: %s", exc, exc_info=True)
+            raise
+
+    def get_session(self, guild_id: int) -> GuildMusicSession:
+        if guild_id not in self.sessions:
+            session = GuildMusicSession(guild_id, self)
+            self.sessions[guild_id] = session
+            self._register_session(session)
+        return self.sessions[guild_id]
+
+    def _register_session(self, session: GuildMusicSession) -> None:
+        self._by_session_id[session.session_id] = session
+
+    def get_by_session_id(self, session_id: str) -> Optional[GuildMusicSession]:
+        session = self._by_session_id.get(session_id)
+        if session and session.is_expired():
+            return None
+        return session
+
+    def validate_token(self, session_id: str, token: str) -> Optional[GuildMusicSession]:
+        session = self.get_by_session_id(session_id)
+        if not session or not secrets.compare_digest(session.session_token, token):
+            return None
+        return session
+
+    async def register_events(self) -> None:
+        @self.bot.listen()
+        async def on_wavelink_track_start(payload: wavelink.TrackStartEventPayload) -> None:
+            guild_id = payload.player.guild.id
+            session = self.sessions.get(guild_id)
+            if session and payload.track:
+                session._last_track = payload.track
+                await session.notify()
+
+        @self.bot.listen()
+        async def on_wavelink_track_end(payload: wavelink.TrackEndEventPayload) -> None:
+            guild_id = payload.player.guild.id
+            session = self.sessions.get(guild_id)
+            if session:
+                await session.handle_track_end(payload.player, payload.track)
+                if payload.track:
+                    session._last_track = payload.track
+
+        @self.bot.listen()
+        async def on_wavelink_track_exception(
+            payload: wavelink.TrackExceptionEventPayload,
+        ) -> None:
+            exc = payload.exception or {}
+            message = str(exc.get("message", ""))
+            cause = str(exc.get("cause", ""))
+            log.warning(
+                "Track failed to play (guild=%s): %s — %s",
+                getattr(payload.player.guild, "id", "?"),
+                message[:120],
+                cause[:200],
+            )
+            player = payload.player
+            if not player:
+                return
+            session = self.sessions.get(player.guild.id)
+            if "login" in message.lower() or "All clients failed" in cause:
+                log.warning(
+                    "YouTube blocked playback — complete Lavalink OAuth setup "
+                    "(see MinecadiaUtilities/docs/MUSIC_LAVALINK.md)."
+                )
+            try:
+                await player.skip(force=True)
+            except Exception:
+                pass
+            if session:
+                await session.notify()
+
+    def check_member_web(
+        self,
+        session: GuildMusicSession,
+        user_id: int,
+        *,
+        need_control: bool = False,
+        need_queue: bool = False,
+    ) -> discord.Member:
+        guild = self.bot.get_guild(session.guild_id)
+        if not guild:
+            raise UserFacingError("Guild not available.")
+        member = guild.get_member(user_id)
+        if not member:
+            raise UserFacingError("You must be in this Discord server.")
+        player = session.get_player()
+        vc_id = player.channel.id if player and player.channel else None
+        if need_control and not can_control(member, voice_channel_id=vc_id):
+            raise UserFacingError("You do not have permission to control playback.")
+        if need_queue and not can_queue(member, voice_channel_id=vc_id):
+            raise UserFacingError("You do not have permission to modify the queue.")
+        return member

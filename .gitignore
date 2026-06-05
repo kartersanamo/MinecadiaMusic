@@ -1,0 +1,7 @@
+.env
+*.log
+*.py[cod]
+.venv/
+logs/
+lavalink/Lavalink.jar
+lavalink/application.yml

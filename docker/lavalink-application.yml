@@ -1,0 +1,61 @@
+server:
+  port: 2333
+  address: 0.0.0.0
+lavalink:
+  plugins:
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.1"
+      repository: "https://maven.lavalink.dev/releases"
+  server:
+    password: "youshallnotpass"
+    sources:
+      youtube: false
+      bandcamp: true
+      soundcloud: true
+      twitch: true
+      vimeo: true
+      nico: true
+      http: true
+      local: false
+    filters:
+      volume: true
+    bufferDurationMs: 400
+    youtubePlaylistLoadLimit: 6
+    playerUpdateInterval: 5
+    youtubeSearchEnabled: true
+    soundcloudSearchEnabled: true
+    gc-warnings: true
+
+plugins:
+  youtube:
+    enabled: true
+    allowSearch: true
+    allowDirectVideoIds: true
+    allowDirectPlaylistIds: true
+    # Required for reliable YouTube playback (use a burner Google account).
+    oauth:
+      enabled: true
+      skipInitialization: true
+      # refreshToken: "paste after Lavalink OAuth flow (burner Google account)"
+    remoteCipher:
+      url: "https://cipher.kikkia.dev"
+      userAgent: "MinecadiaUtilities"
+    clients:
+      - TV
+      - WEBEMBEDDED
+      - MUSIC
+    clientOptions:
+      TV:
+        playback: true
+        videoLoading: true
+        searching: false
+        playlistLoading: false
+      MUSIC:
+        playback: false
+        videoLoading: false
+        searching: false
+        playlistLoading: false
+      WEBEMBEDDED:
+        playback: true
+        videoLoading: true
+        searching: true
+        playlistLoading: false

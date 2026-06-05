@@ -1,0 +1,66 @@
+# Copy to application.yml and add your refreshToken (never commit application.yml).
+
+logging:
+  level:
+    dev.lavalink.youtube.http.YoutubeOauth2Handler: INFO
+
+server:
+  port: 2333
+  address: 0.0.0.0
+lavalink:
+  plugins:
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.1"
+      repository: "https://maven.lavalink.dev/releases"
+  server:
+    password: "youshallnotpass"
+    sources:
+      youtube: false
+      bandcamp: true
+      soundcloud: true
+      twitch: true
+      vimeo: true
+      nico: true
+      http: true
+      local: false
+    filters:
+      volume: true
+    bufferDurationMs: 400
+    youtubePlaylistLoadLimit: 6
+    playerUpdateInterval: 5
+    youtubeSearchEnabled: true
+    soundcloudSearchEnabled: true
+    gc-warnings: true
+
+plugins:
+  youtube:
+    enabled: true
+    allowSearch: true
+    allowDirectVideoIds: true
+    allowDirectPlaylistIds: true
+    oauth:
+      enabled: true
+      skipInitialization: true
+      refreshToken: "paste_your_token_here"
+    remoteCipher:
+      url: "https://cipher.kikkia.dev"
+      userAgent: "MinecadiaUtilities"
+    clients:
+      - TV
+      - WEBEMBEDDED
+      - MUSIC
+    clientOptions:
+      TV:
+        playback: true
+        videoLoading: true
+        searching: true
+        playlistLoading: false
+      MUSIC:
+        playback: false
+        videoLoading: false
+        searching: false
+        playlistLoading: false
+      WEBEMBEDDED:
+        playback: false
+        videoLoading: false
+        searching: false
+        playlistLoading: false

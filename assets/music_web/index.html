@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Minecadia Music</title>
+  <link rel="stylesheet" href="/static/styles.css" id="cssLink" />
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>Minecadia Music</h1>
+      <p class="subtitle" id="channelLabel">Loading session…</p>
+      <div class="header-actions">
+        <button type="button" id="btnLogin" class="secondary">Sign in with Discord</button>
+        <span id="userLabel" class="user-label"></span>
+      </div>
+    </header>
+
+    <section class="now-playing card">
+      <div id="npArt" class="art"></div>
+      <div class="np-info">
+        <h2 id="npTitle">Nothing playing</h2>
+        <p id="npAuthor"></p>
+        <div class="progress"><div id="progressBar"></div></div>
+        <p id="npTime" class="muted"></p>
+      </div>
+      <div class="transport">
+        <button type="button" data-action="shuffle" title="Shuffle">🔀</button>
+        <button type="button" data-action="pause" title="Pause">⏸</button>
+        <button type="button" data-action="resume" title="Resume">▶</button>
+        <button type="button" data-action="skip" title="Skip">⏭</button>
+        <button type="button" data-action="stop" class="danger" title="Stop">⏹</button>
+      </div>
+    </section>
+
+    <section class="search card">
+      <h3>Add music</h3>
+      <div class="search-row">
+        <input type="text" id="searchInput" placeholder="Search or paste URL…" />
+        <button type="button" id="btnSearch">Search</button>
+      </div>
+      <ul id="searchResults" class="results"></ul>
+    </section>
+
+    <section class="queue card">
+      <div class="queue-header">
+        <h3>Queue</h3>
+        <label>Loop
+          <select id="loopSelect">
+            <option value="off">Off</option>
+            <option value="track">Track</option>
+            <option value="queue">Queue</option>
+          </select>
+        </label>
+        <label>Volume
+          <input type="range" id="volume" min="0" max="150" value="100" />
+        </label>
+      </div>
+      <ol id="queueList"></ol>
+    </section>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+  <script src="/static/app.js" id="jsScript"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+services:
+  lavalink:
+    image: ghcr.io/lavalink-devs/lavalink:4
+    container_name: minecadia-lavalink
+    restart: unless-stopped
+    ports:
+      - "2333:2333"
+    volumes:
+      - ./lavalink-application.yml:/opt/Lavalink/application.yml:ro
+    environment:
+      - _JAVA_OPTIONS=-Xmx512M
