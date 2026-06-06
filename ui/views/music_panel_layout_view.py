@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import discord
 from discord.enums import SeparatorSpacing
 from discord.ext import commands
@@ -21,6 +23,8 @@ from ui.views.music_panel_support import (
     _accent_int,
 )
 from ui.views.music_search_view import MusicSearchView, search_results_embed
+
+log = logging.getLogger("Music")
 
 
 def _voice_id(session) -> int | None:
@@ -78,14 +82,18 @@ class _QueryModal(discord.ui.Modal, title="Play music"):
                 )
                 embed = search_results_embed(results, q)
                 await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-                await refresh_panel_message(
-                    self.state.session,
-                    self.state.bot,
-                    notice="Pick a track from the search menu above.",
-                )
+                try:
+                    await refresh_panel_message(
+                        self.state.session,
+                        self.state.bot,
+                        notice="Pick a track from the search menu above.",
+                    )
+                except Exception:
+                    pass
         except UserFacingError as exc:
             await interaction.followup.send(exc.user_message, ephemeral=True)
         except Exception:
+            log.exception("Search/play modal failed")
             await interaction.followup.send(
                 "Something went wrong. Try again or use the web dashboard.",
                 ephemeral=True,

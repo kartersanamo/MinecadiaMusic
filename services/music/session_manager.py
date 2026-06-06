@@ -58,6 +58,9 @@ class GuildMusicSession:
                 return member.display_name
         return f"User {user_id}"
 
+    def clear_activity(self) -> None:
+        self._activity_log.clear()
+
     def log_activity(self, actor_id: int, text: str) -> None:
         self._activity_log.append(
             {
@@ -87,9 +90,11 @@ class GuildMusicSession:
         self.session_token = secrets.token_urlsafe(32)
         self.created_at = time.time()
         self.panel_creator_id = user_id
+        self.clear_activity()
         self.manager._by_session_id.pop(old_id, None)
         self.manager._by_session_id[self.session_id] = self
         self.schedule_persist()
+        asyncio.create_task(self.notify())
         return self.public_url()
 
     def public_url(self) -> str:
@@ -138,7 +143,7 @@ class GuildMusicSession:
                 session_token=self.session_token,
                 panel_creator_id=self.panel_creator_id,
                 loop_mode=self.loop_mode.value,
-                activity_log=self._activity_log,
+                activity_log=[],
             )
         except asyncio.CancelledError:
             pass
@@ -155,9 +160,7 @@ class GuildMusicSession:
         )
         self.text_channel_id = int(row["channel_id"])
         self.loop_mode = LoopMode(str(row.get("loop_mode") or "off"))
-        activity = row.get("activity_log") or []
-        if isinstance(activity, list):
-            self._activity_log = activity[-_ACTIVITY_MAX:]
+        self.clear_activity()
         self.manager._register_session(self)
 
     def _schedule_panel_refresh(self) -> None:

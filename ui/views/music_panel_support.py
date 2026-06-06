@@ -56,8 +56,11 @@ def build_panel_markdown(state: MusicPanelState) -> tuple[str, str, str, str, st
         lines.append(f"*{state.notice}*")
         lines.append("")
 
-    vc = session_state.get("voiceChannel")
-    lines.append(f"**Voice:** {vc.mention if vc else 'Not connected'}")
+    player = state.session.get_player()
+    if player and player.channel:
+        lines.append(f"**Voice:** {player.channel.mention}")
+    else:
+        lines.append("**Voice:** Not connected")
     lines.append(f"**Loop:** {session_state.get('loopMode', 'off').upper()}")
     lines.append(f"**Volume:** {session_state.get('volume', 100)}%")
 

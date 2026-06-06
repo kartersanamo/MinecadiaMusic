@@ -189,41 +189,47 @@ class MusicSearchView(discord.ui.View):
 
     async def _on_select(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        idx = int(interaction.data.get("values")[0])
-        item = self._results[idx]
+        try:
+            idx = int(interaction.data.get("values")[0])
+            item = self._results[idx]
 
-        if item.kind == "playlist":
-            view = MusicPlaylistConfirmView(
-                self.session,
-                item,
+            if item.kind == "playlist":
+                view = MusicPlaylistConfirmView(
+                    self.session,
+                    item,
+                    self.requester_id,
+                    self.bot,
+                    on_added=self.on_track_added,
+                )
+                for child in view.children:
+                    if isinstance(child, discord.ui.Button) and child.custom_id == "mp_pl_add_all":
+                        child.label = f"Add all {item.track_count} tracks"
+                        break
+                await interaction.followup.send(
+                    embed=_playlist_embed(item),
+                    view=view,
+                    ephemeral=True,
+                )
+                self.stop()
+                return
+
+            tracks = await tracks_from_identifier(item.identifier, kind="track")
+            track = tracks[0]
+            track.extras = {"requester_id": self.requester_id}
+            member = interaction.guild.get_member(interaction.user.id) if interaction.guild else None
+            started = await self.session.add_tracks(
+                [track],
                 self.requester_id,
-                self.bot,
-                on_added=self.on_track_added,
+                connect_member=member,
             )
-            for child in view.children:
-                if isinstance(child, discord.ui.Button) and child.custom_id == "mp_pl_add_all":
-                    child.label = f"Add all {item.track_count} tracks"
-                    break
-            await interaction.followup.send(
-                embed=_playlist_embed(item),
-                view=view,
-                ephemeral=True,
-            )
+            embed = _track_added_embed(track, started=started[1])
+            view = _track_added_view(track)
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            if self.on_track_added:
+                await self.on_track_added()
             self.stop()
-            return
+        except Exception as exc:
+            from core.errors.exceptions import UserFacingError
 
-        tracks = await tracks_from_identifier(item.identifier, kind="track")
-        track = tracks[0]
-        track.extras = {"requester_id": self.requester_id}
-        member = interaction.guild.get_member(interaction.user.id) if interaction.guild else None
-        started = await self.session.add_tracks(
-            [track],
-            self.requester_id,
-            connect_member=member,
-        )
-        embed = _track_added_embed(track, started=started[1])
-        view = _track_added_view(track)
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-        if self.on_track_added:
-            await self.on_track_added()
-        self.stop()
+            msg = exc.user_message if isinstance(exc, UserFacingError) else "Could not add that track."
+            await interaction.followup.send(msg, ephemeral=True)
