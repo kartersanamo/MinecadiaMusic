@@ -49,6 +49,30 @@ class GuildMusicSession:
         self.oauth_users: dict[int, float] = {}
         self._activity_log: list[dict[str, Any]] = []
         self._persist_task: Optional[asyncio.Task] = None
+        self._queue_page = 0
+
+    def _queue_length(self) -> int:
+        player = self.get_player()
+        if not player:
+            return 0
+        return len(player.queue)
+
+    def clamp_queue_page(self, page_size: int = 8) -> None:
+        length = self._queue_length()
+        if length <= 0:
+            self._queue_page = 0
+            return
+        max_page = max(0, (length - 1) // page_size)
+        self._queue_page = max(0, min(self._queue_page, max_page))
+
+    def bump_queue_page(self, delta: int, page_size: int = 8) -> None:
+        length = self._queue_length()
+        max_page = max(0, (length - 1) // page_size) if length else 0
+        self._queue_page = max(0, min(self._queue_page + delta, max_page))
+
+    @property
+    def queue_page(self) -> int:
+        return self._queue_page
 
     def _member_display_name(self, user_id: int) -> str:
         guild = self.manager.bot.get_guild(self.guild_id)
@@ -336,6 +360,7 @@ class GuildMusicSession:
             else:
                 self.log_activity(requester_id, f"added **{len(tracks)} tracks** to the queue")
 
+        self.clamp_queue_page()
         await self.notify()
         return len(tracks), started
 
@@ -451,8 +476,54 @@ class GuildMusicSession:
                 actor_id,
                 f"removed **{removed.title or 'Unknown'}** from the queue",
             )
+        self.clamp_queue_page()
         await self.notify()
         return f"Removed **{removed.title}** from the queue."
+
+    async def remove_many(self, indices: list[int], *, actor_id: int | None = None) -> str:
+        player = self.get_player()
+        if not player:
+            raise UserFacingError("Not connected.")
+        if not indices:
+            raise UserFacingError("Nothing selected to remove.")
+        unique = sorted({int(i) for i in indices}, reverse=True)
+        removed_titles: list[str] = []
+        for index in unique:
+            if index < 0 or index >= len(player.queue):
+                raise UserFacingError("Invalid queue position.")
+            track = player.queue.peek(index)
+            removed_titles.append(track.title or "Unknown")
+            player.queue.delete(index)
+        if actor_id:
+            if len(removed_titles) == 1:
+                self.log_activity(
+                    actor_id,
+                    f"removed **{removed_titles[0]}** from the queue",
+                )
+            else:
+                self.log_activity(
+                    actor_id,
+                    f"removed **{len(removed_titles)} tracks** from the queue",
+                )
+        self.clamp_queue_page()
+        await self.notify()
+        if len(removed_titles) == 1:
+            return f"Removed **{removed_titles[0]}** from the queue."
+        return f"Removed **{len(removed_titles)}** tracks from the queue."
+
+    async def clear_queue(self, *, actor_id: int | None = None) -> str:
+        player = self.get_player()
+        if not player:
+            raise UserFacingError("Not connected.")
+        if player.queue.is_empty:
+            raise UserFacingError("Queue is already empty.")
+        count = len(player.queue)
+        player.queue.clear()
+        self._queue_page = 0
+        if actor_id:
+            self.log_activity(actor_id, f"cleared the queue (**{count}** tracks)")
+        await self.notify()
+        return f"Cleared **{count}** tracks from the queue."
 
     async def move_track(
         self,

@@ -14,6 +14,8 @@ from services.music.search_results import markdown_link
 if TYPE_CHECKING:
     from services.music.session_manager import GuildMusicSession
 
+QUEUE_PAGE_SIZE = 8
+
 
 @dataclass
 class MusicPanelState:
@@ -86,9 +88,14 @@ def build_panel_markdown(state: MusicPanelState) -> tuple[str, str, str, str, st
     status_md = "\n".join(lines)
 
     queue = session_state.get("queue") or []
+    state.session.clamp_queue_page(QUEUE_PAGE_SIZE)
+    page = state.session.queue_page
     queue_lines = ["**Queue**"]
     if queue:
-        for i, t in enumerate(queue[:8], 1):
+        start = page * QUEUE_PAGE_SIZE
+        page_items = queue[start : start + QUEUE_PAGE_SIZE]
+        max_page = max(0, (len(queue) - 1) // QUEUE_PAGE_SIZE)
+        for i, t in enumerate(page_items, start + 1):
             title = markdown_link(
                 (t.get("title") or "Unknown")[:60],
                 t.get("uri"),
@@ -97,8 +104,8 @@ def build_panel_markdown(state: MusicPanelState) -> tuple[str, str, str, str, st
             author = (t.get("author") or "")[:40]
             requester = _requester_label(state.guild, t)
             queue_lines.append(f"`{i}.` {title} — {author}{requester}")
-        if len(queue) > 8:
-            queue_lines.append(f"*+ {len(queue) - 8} more in queue*")
+        if len(queue) > QUEUE_PAGE_SIZE:
+            queue_lines.append(f"*Page {page + 1} of {max_page + 1} · {len(queue)} tracks*")
     else:
         queue_lines.append("*Empty*")
     queue_md = "\n".join(queue_lines)
@@ -177,8 +184,12 @@ async def edit_music_panel(interaction: discord.Interaction, state: MusicPanelSt
 
     view = MusicPanelLayoutView(interaction, state)
     kwargs: dict[str, Any] = {"content": None, "embed": None, "view": view}
+    msg = interaction.message
     if interaction.response.is_done():
-        await interaction.edit_original_response(**kwargs)
+        if msg is not None:
+            await msg.edit(**kwargs)
+        else:
+            await interaction.edit_original_response(**kwargs)
     else:
         await interaction.response.edit_message(**kwargs)
 

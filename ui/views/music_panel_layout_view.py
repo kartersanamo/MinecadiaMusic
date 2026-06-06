@@ -15,6 +15,7 @@ from services.music.queue import LoopMode
 from services.music.resolver import search_media
 from ui.views.music_panel_support import (
     MusicPanelState,
+    QUEUE_PAGE_SIZE,
     build_panel_markdown,
     check_panel_owner,
     edit_music_panel,
@@ -228,8 +229,9 @@ class _MPActionButton(discord.ui.Button):
         action: str,
         style: discord.ButtonStyle,
         custom_id: str,
+        disabled: bool = False,
     ):
-        super().__init__(label=label, style=style, custom_id=custom_id)
+        super().__init__(label=label, style=style, custom_id=custom_id, disabled=disabled)
         self._bot = bot
         self._action = action
 
@@ -300,26 +302,43 @@ class _MPLoopSelect(discord.ui.Select):
 
 class _MPRemoveSelect(discord.ui.Select):
     def __init__(self, bot: commands.Bot, queue: list | None = None):
-        items = queue or [{"title": "—", "author": ""}]
-        super().__init__(
-            placeholder="Remove from queue…",
-            custom_id="mp_remove",
-            options=[
-                discord.SelectOption(
-                    label=(t.get("title") or "Unknown")[:100],
-                    description=(
-                        f"{(t.get('author') or '')[:60]}"
-                        + (
-                            f" · {t.get('requesterName')}"
-                            if t.get("requesterName")
-                            else ""
-                        )
-                    )[:100],
-                    value=str(i),
-                )
-                for i, t in enumerate(items[:25])
-            ],
-        )
+        items = queue or []
+        if items:
+            option_count = min(len(items), 25)
+            super().__init__(
+                placeholder="Remove from queue (select multiple)…",
+                custom_id="mp_remove",
+                min_values=1,
+                max_values=option_count,
+                options=[
+                    discord.SelectOption(
+                        label=(t.get("title") or "Unknown")[:100],
+                        description=(
+                            f"{(t.get('author') or '')[:60]}"
+                            + (
+                                f" · {t.get('requesterName')}"
+                                if t.get("requesterName")
+                                else ""
+                            )
+                        )[:100],
+                        value=str(i),
+                    )
+                    for i, t in enumerate(items[:25])
+                ],
+            )
+        else:
+            super().__init__(
+                placeholder="Remove from queue…",
+                custom_id="mp_remove",
+                options=[
+                    discord.SelectOption(
+                        label="—",
+                        description="Nothing queued",
+                        value="0",
+                    )
+                ],
+                disabled=True,
+            )
         self._bot = bot
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -331,8 +350,42 @@ class _MPRemoveSelect(discord.ui.Select):
             member = interaction.guild.get_member(interaction.user.id)
             if not can_control(member, voice_channel_id=_voice_id(state.session)):
                 raise UserFacingError("You cannot control playback.")
-            idx = int(interaction.data.get("values")[0])
-            await state.session.remove_at(idx, actor_id=interaction.user.id)
+            values = interaction.data.get("values") or []
+            indices = [int(v) for v in values]
+            if len(indices) == 1:
+                await state.session.remove_at(indices[0], actor_id=interaction.user.id)
+            else:
+                await state.session.remove_many(indices, actor_id=interaction.user.id)
+            new_state = MusicPanelState(
+                session=state.session,
+                bot=state.bot,
+                owner_id=state.owner_id,
+                panel_url=state.panel_url,
+                guild=state.guild,
+            )
+            await edit_music_panel(interaction, new_state)
+        except UserFacingError as exc:
+            await interaction.followup.send(exc.user_message, ephemeral=True)
+
+
+class _MPQueuePageButton(discord.ui.Button):
+    def __init__(self, bot: commands.Bot, *, direction: int, disabled: bool = False):
+        super().__init__(
+            label="◀ Prev" if direction < 0 else "Next ▶",
+            style=discord.ButtonStyle.secondary,
+            custom_id="mp_queue_prev" if direction < 0 else "mp_queue_next",
+            disabled=disabled,
+        )
+        self._bot = bot
+        self._direction = direction
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        state = await resolve_panel_state(interaction, self._bot)
+        if not state or not await check_panel_owner(interaction, state.owner_id):
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            state.session.bump_queue_page(self._direction, QUEUE_PAGE_SIZE)
             new_state = MusicPanelState(
                 session=state.session,
                 bot=state.bot,
@@ -434,6 +487,14 @@ def _build_panel_rows(
             style=discord.ButtonStyle.secondary,
             custom_id="mp_shuffle",
         ),
+        _MPActionButton(
+            bot_ref,
+            label="Clear",
+            action="clear_queue",
+            style=discord.ButtonStyle.danger,
+            custom_id="mp_clear",
+            disabled=register_only or not queue,
+        ),
     )
     row3 = discord.ui.ActionRow(
         _MPLoopSelect(bot_ref, loop=session_state.get("loopMode", "off"))
@@ -442,18 +503,30 @@ def _build_panel_rows(
         _MPVolumeSelect(bot_ref, session_state.get("volume", 100))
     )
 
+    queue_nav_row = None
+    if not register_only and state is not None and len(queue) > QUEUE_PAGE_SIZE:
+        state.session.clamp_queue_page(QUEUE_PAGE_SIZE)
+        page = state.session.queue_page
+        max_page = max(0, (len(queue) - 1) // QUEUE_PAGE_SIZE)
+        queue_nav_row = discord.ui.ActionRow(
+            _MPQueuePageButton(bot_ref, direction=-1, disabled=page <= 0),
+            _MPQueuePageButton(bot_ref, direction=1, disabled=page >= max_page),
+        )
+
     if register_only:
         row4 = discord.ui.ActionRow(_MPRemoveSelect(bot_ref))
         rows = [row1, row2, row3, row4, volume_row]
         row5 = None
     elif queue:
-        rows = [
-            row1,
-            row2,
-            row3,
-            discord.ui.ActionRow(_MPRemoveSelect(bot_ref, queue)),
-            volume_row,
-        ]
+        rows = [row1, row2, row3]
+        if queue_nav_row is not None:
+            rows.append(queue_nav_row)
+        rows.extend(
+            [
+                discord.ui.ActionRow(_MPRemoveSelect(bot_ref, queue)),
+                volume_row,
+            ]
+        )
         row5 = discord.ui.ActionRow(
             discord.ui.Button(
                 label="Open web dashboard",
