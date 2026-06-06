@@ -351,11 +351,11 @@ class _MPVolumeSelect(discord.ui.Select):
             placeholder=f"Volume ({volume}%)",
             custom_id="mp_volume",
             options=[
-                discord.SelectOption(label="25%", value="25"),
-                discord.SelectOption(label="50%", value="50"),
-                discord.SelectOption(label="75%", value="75"),
+                discord.SelectOption(label="25%", value="25", default=volume == 25),
+                discord.SelectOption(label="50%", value="50", default=volume == 50),
+                discord.SelectOption(label="75%", value="75", default=volume == 75),
                 discord.SelectOption(label="100%", value="100", default=volume == 100),
-                discord.SelectOption(label="125%", value="125"),
+                discord.SelectOption(label="125%", value="125", default=volume == 125),
             ],
         )
         self._bot = bot
@@ -438,14 +438,22 @@ def _build_panel_rows(
     row3 = discord.ui.ActionRow(
         _MPLoopSelect(bot_ref, loop=session_state.get("loopMode", "off"))
     )
+    volume_row = discord.ui.ActionRow(
+        _MPVolumeSelect(bot_ref, session_state.get("volume", 100))
+    )
 
     if register_only:
         row4 = discord.ui.ActionRow(_MPRemoveSelect(bot_ref))
-        row4b = discord.ui.ActionRow(_MPVolumeSelect(bot_ref))
-        rows = [row1, row2, row3, row4, row4b]
+        rows = [row1, row2, row3, row4, volume_row]
         row5 = None
     elif queue:
-        rows = [row1, row2, row3, discord.ui.ActionRow(_MPRemoveSelect(bot_ref, queue))]
+        rows = [
+            row1,
+            row2,
+            row3,
+            discord.ui.ActionRow(_MPRemoveSelect(bot_ref, queue)),
+            volume_row,
+        ]
         row5 = discord.ui.ActionRow(
             discord.ui.Button(
                 label="Open web dashboard",
@@ -454,14 +462,7 @@ def _build_panel_rows(
             )
         )
     else:
-        rows = [
-            row1,
-            row2,
-            row3,
-            discord.ui.ActionRow(
-                _MPVolumeSelect(bot_ref, session_state.get("volume", 100))
-            ),
-        ]
+        rows = [row1, row2, row3, volume_row]
         row5 = discord.ui.ActionRow(
             discord.ui.Button(
                 label="Open web dashboard",
