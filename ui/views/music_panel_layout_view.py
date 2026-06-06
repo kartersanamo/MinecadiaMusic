@@ -300,6 +300,23 @@ class _MPLoopSelect(discord.ui.Select):
             await interaction.followup.send(exc.user_message, ephemeral=True)
 
 
+class _MPLaunchActivityButton(discord.ui.Button):
+    def __init__(self, bot: commands.Bot, *, disabled: bool = False):
+        super().__init__(
+            label="Launch Dashboard",
+            style=discord.ButtonStyle.primary,
+            custom_id="mp_launch_activity",
+            disabled=disabled,
+        )
+        self._bot = bot
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        state = await resolve_panel_state(interaction, self._bot)
+        if not state or not await check_panel_owner(interaction, state.owner_id):
+            return
+        await interaction.response.launch_activity()
+
+
 class _MPRemoveSelect(discord.ui.Select):
     def __init__(self, bot: commands.Bot, queue: list | None = None):
         items = queue or []
@@ -436,6 +453,22 @@ class _MPVolumeSelect(discord.ui.Select):
             await interaction.followup.send(exc.user_message, ephemeral=True)
 
 
+def _dashboard_row(
+    bot: commands.Bot,
+    panel_url: str,
+    *,
+    register_only: bool = False,
+) -> discord.ui.ActionRow:
+    return discord.ui.ActionRow(
+        _MPLaunchActivityButton(bot, disabled=register_only),
+        discord.ui.Button(
+            label="Open in browser",
+            style=discord.ButtonStyle.link,
+            url=panel_url,
+        ),
+    )
+
+
 def _build_panel_rows(
     bot: commands.Bot,
     state: MusicPanelState | None,
@@ -516,7 +549,7 @@ def _build_panel_rows(
     if register_only:
         row4 = discord.ui.ActionRow(_MPRemoveSelect(bot_ref))
         rows = [row1, row2, row3, row4, volume_row]
-        row5 = None
+        row5 = _dashboard_row(bot_ref, panel_url, register_only=True)
     elif queue:
         rows = [row1, row2, row3]
         if queue_nav_row is not None:
@@ -527,22 +560,10 @@ def _build_panel_rows(
                 volume_row,
             ]
         )
-        row5 = discord.ui.ActionRow(
-            discord.ui.Button(
-                label="Open web dashboard",
-                style=discord.ButtonStyle.link,
-                url=panel_url,
-            )
-        )
+        row5 = _dashboard_row(bot_ref, panel_url)
     else:
         rows = [row1, row2, row3, volume_row]
-        row5 = discord.ui.ActionRow(
-            discord.ui.Button(
-                label="Open web dashboard",
-                style=discord.ButtonStyle.link,
-                url=panel_url,
-            )
-        )
+        row5 = _dashboard_row(bot_ref, panel_url)
 
     return rows, row5
 
@@ -567,7 +588,7 @@ class MusicPanelLayoutView(discord.ui.LayoutView):
             queue_md = "**Queue**"
             activity_md = "**Activity**"
             dashboard_md = "*Use `/music` to refresh a stale panel.*"
-            rows, _row5 = _build_panel_rows(bot, None, register_only=True)
+            rows, row5 = _build_panel_rows(bot, None, register_only=True)
         else:
             if state is None:
                 raise ValueError("state is required when register_only=False")
@@ -586,7 +607,7 @@ class MusicPanelLayoutView(discord.ui.LayoutView):
         inner.append(discord.ui.TextDisplay(dashboard_md))
 
         inner.extend(rows)
-        if not register_only and row5 is not None:
+        if row5 is not None:
             inner.append(row5)
         inner.append(discord.ui.TextDisplay(ConfigManager.get("FOOTER") or ""))
 

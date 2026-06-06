@@ -14,6 +14,7 @@ from core.loggers import log_commands, log_tasks
 
 load_dotenv()
 
+from core.activity_entry_point import ensure_activity_entry_point, install_activity_entry_point
 from core.errors.setup import wire_bot
 
 COG_FILES = [file.split(".")[0].title() for file in os.listdir("cogs/") if file.endswith(".py")]
@@ -23,6 +24,7 @@ class Client(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=".", intents=discord.Intents().all())
         wire_bot(self, bot_name="Music", log_commands=log_commands, log_tasks=log_tasks)
+        install_activity_entry_point(self)
 
     @task("Setup Cogs")
     async def setup_cogs(self):
@@ -57,10 +59,29 @@ class Client(commands.Bot):
                 len(synced),
                 guild_id,
             )
-            self.tree.clear_commands(guild=None)
-            await self.tree.sync()
+            try:
+                self.tree.clear_commands(guild=None)
+                await self.tree.sync()
+            except discord.HTTPException as exc:
+                if exc.code == 50240:
+                    log_tasks.warning(
+                        "Skipped global command wipe — Discord Activities Entry Point "
+                        "cannot be removed via bulk sync (50240)."
+                    )
+                else:
+                    raise
             return synced
-        synced = await self.tree.sync()
+        try:
+            synced = await self.tree.sync()
+        except discord.HTTPException as exc:
+            if exc.code == 50240:
+                log_tasks.warning(
+                    "Global command sync incomplete — Activities Entry Point "
+                    "must stay registered (50240)."
+                )
+                synced = []
+            else:
+                raise
         command_list = ", ".join(c.name for c in synced)
         log_tasks.info("Globally synced %s commands: %s", len(synced), command_list)
         return synced
@@ -101,6 +122,7 @@ class Client(commands.Bot):
             await self.app.music.restore_panels()
         except Exception as exc:
             log_tasks.error("Failed to restore music panels: %s", exc)
+        await ensure_activity_entry_point(self)
         await self.update_presence()
         await self.remove_help()
         await self.sync_command_tree()

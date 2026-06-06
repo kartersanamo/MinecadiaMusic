@@ -11,8 +11,10 @@ from aiohttp import web
 
 
 from assets.music_http.auth import (
+    activity_bootstrap_for_user,
     discord_fetch_user,
     discord_oauth_exchange,
+    discord_oauth_exchange_activity,
     oauth_authorize_url,
     session_from_request,
 )
@@ -30,7 +32,7 @@ _WEB_DIR = Path(__file__).resolve().parent.parent / "music_web"
 
 def _asset_version() -> str:
     version = 0
-    for name in ("styles.css", "app.js", "index.html"):
+    for name in ("styles.css", "app.js", "index.html", "discord-embedded-app-sdk.mjs"):
         path = _WEB_DIR / name
         if path.is_file():
             version = max(version, int(path.stat().st_mtime))
@@ -39,6 +41,24 @@ def _asset_version() -> str:
 
 def _music_port() -> int:
     return int(os.getenv("MUSIC_HTTP_PORT", "8790"))
+
+
+_FRAME_ANCESTORS = (
+    "frame-ancestors https://*.discord.com https://discord.com "
+    "https://*.discordsays.com;"
+)
+
+
+@web.middleware
+async def security_headers_middleware(request: web.Request, handler):
+    response = await handler(request)
+    if isinstance(response, web.Response):
+        response.headers.setdefault("Content-Security-Policy", _FRAME_ANCESTORS)
+    return response
+
+
+def _discord_client_id() -> str:
+    return os.getenv("DISCORD_CLIENT_ID", "")
 
 
 def _api_error_response(exc: Exception, *, context: str) -> web.Response:
@@ -70,7 +90,7 @@ def _parse_user_id(body: dict, session) -> int:
 async def start_music_http(bot: "commands.Bot") -> None:
     global _server
     manager = bot.app.music
-    app = web.Application()
+    app = web.Application(middlewares=[security_headers_middleware])
 
     async def health(_request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "lavalink": manager._lavalink_ready})
@@ -82,7 +102,9 @@ async def start_music_http(bot: "commands.Bot") -> None:
             raise web.HTTPForbidden()
         if not path.is_file():
             raise web.HTTPNotFound()
-        ctype = "application/javascript" if path.suffix == ".js" else "text/css"
+        ctype = "text/css"
+        if path.suffix in (".js", ".mjs"):
+            ctype = "application/javascript"
         return web.Response(
             body=path.read_bytes(),
             content_type=ctype,
@@ -97,7 +119,9 @@ async def start_music_http(bot: "commands.Bot") -> None:
         if not index.is_file():
             raise web.HTTPNotFound()
         version = _asset_version()
-        html = index.read_text(encoding="utf-8").replace("__ASSET_VERSION__", version)
+        html = index.read_text(encoding="utf-8")
+        html = html.replace("__ASSET_VERSION__", version)
+        html = html.replace("__DISCORD_CLIENT_ID__", _discord_client_id())
         return web.Response(
             text=html,
             content_type="text/html",
@@ -240,6 +264,47 @@ async def start_music_http(bot: "commands.Bot") -> None:
         resp = web.HTTPFound(f"/{session_id}?token={token}&logged_in=1")
         return resp
 
+    async def api_activity_token(request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+            code = str(body.get("code", "")).strip()
+            if not code:
+                return web.json_response({"ok": False, "error": "Missing code"}, status=400)
+            token_data = await discord_oauth_exchange_activity(code)
+            return web.json_response(
+                {
+                    "ok": True,
+                    "access_token": token_data["access_token"],
+                    "token_type": token_data.get("token_type", "Bearer"),
+                    "expires_in": token_data.get("expires_in"),
+                }
+            )
+        except Exception as exc:
+            return _api_error_response(exc, context="api_activity_token")
+
+    async def api_activity_bootstrap(request: web.Request) -> web.Response:
+        try:
+            auth = request.headers.get("Authorization", "")
+            if not auth.lower().startswith("bearer "):
+                return web.json_response({"ok": False, "error": "Missing access token"}, status=401)
+            access_token = auth[7:].strip()
+            guild_raw = request.query.get("guild_id", "").strip()
+            if not guild_raw.isdigit():
+                return web.json_response({"ok": False, "error": "Missing guild_id"}, status=400)
+            guild_id = int(guild_raw)
+            user = await discord_fetch_user(access_token)
+            user_id = int(user["id"])
+            payload = await activity_bootstrap_for_user(
+                manager,
+                guild_id=guild_id,
+                user_id=user_id,
+            )
+            return web.json_response({"ok": True, **payload})
+        except web.HTTPException:
+            raise
+        except Exception as exc:
+            return _api_error_response(exc, context="api_activity_bootstrap")
+
     async def ws_events(request: web.Request) -> web.WebSocketResponse:
         session, token = session_from_request(request, manager)
         ws = web.WebSocketResponse()
@@ -266,6 +331,8 @@ async def start_music_http(bot: "commands.Bot") -> None:
 
     app.router.add_get("/health", health)
     app.router.add_get("/oauth/callback", oauth_callback)
+    app.router.add_post("/api/activity/token", api_activity_token)
+    app.router.add_get("/api/activity/bootstrap", api_activity_bootstrap)
     app.router.add_get("/api/session/{session_id}/state", api_state)
     app.router.add_get("/api/session/{session_id}/search", api_search)
     app.router.add_post("/api/session/{session_id}/search", api_search)
@@ -275,6 +342,7 @@ async def start_music_http(bot: "commands.Bot") -> None:
     app.router.add_get("/api/session/{session_id}/oauth", api_oauth_url)
     app.router.add_get("/api/session/{session_id}/ws", ws_events)
     app.router.add_get("/static/{path}", serve_static)
+    app.router.add_get("/", serve_spa)
     app.router.add_get("/{session_id}", serve_spa)
 
     runner = web.AppRunner(app)

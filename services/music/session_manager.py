@@ -243,7 +243,34 @@ class GuildMusicSession:
         await player.set_volume(vol)
         player.autoplay = AutoPlayMode.partial
         self._sync_queue_mode(player)
+        await self._on_voice_connected(channel)
         return player
+
+    async def _on_voice_connected(self, channel: discord.VoiceChannel) -> None:
+        try:
+            await self.manager.bot.http.edit_voice_channel_status(
+                "🎵 Open **Launch Dashboard** on the /music panel",
+                channel_id=channel.id,
+            )
+        except Exception:
+            log.debug("Failed to set voice channel status", exc_info=True)
+        try:
+            from ui.views.music_panel_support import refresh_bound_panel
+
+            await refresh_bound_panel(self, self.manager.bot)
+        except Exception:
+            log.debug("Failed to refresh panel after voice connect", exc_info=True)
+
+    async def _clear_voice_channel_status(self, channel_id: int | None) -> None:
+        if not channel_id:
+            return
+        try:
+            await self.manager.bot.http.edit_voice_channel_status(
+                None,
+                channel_id=channel_id,
+            )
+        except Exception:
+            log.debug("Failed to clear voice channel status", exc_info=True)
 
     def _sync_queue_mode(self, player: wavelink.Player) -> None:
         if self.loop_mode == LoopMode.TRACK:
@@ -424,10 +451,12 @@ class GuildMusicSession:
 
     async def stop(self, *, actor_id: int | None = None) -> str:
         player = self.get_player()
+        voice_channel_id = player.channel.id if player and player.channel else None
         if player:
             player.queue.clear()
             await player.stop()
             await player.disconnect()
+        await self._clear_voice_channel_status(voice_channel_id)
         self.loop_mode = LoopMode.OFF
         self._last_track = None
         if actor_id:
@@ -568,10 +597,12 @@ class GuildMusicSession:
                 and not current.playing
                 and current.channel
             ):
+                voice_channel_id = current.channel.id
                 try:
                     await current.disconnect()
                 except Exception:
                     log.debug("Idle disconnect failed", exc_info=True)
+                await self._clear_voice_channel_status(voice_channel_id)
         await self.notify()
 
 

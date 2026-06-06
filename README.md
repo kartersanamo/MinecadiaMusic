@@ -7,6 +7,24 @@ Discord bot for music playback on Minecadia: `/music` panel, Lavalink, and the w
 - `/music` — Components V2 in-channel music player panel
 - Lavalink playback (YouTube, SoundCloud, etc.)
 - Web dashboard at `MUSIC_PUBLIC_BASE_URL` (default `https://music.kartersanamo.com`)
+- **Discord Activity** — launch the dashboard inside Discord from the panel (**Launch Dashboard** button)
+
+## Discord Activity setup (Developer Portal)
+
+Required once per application (`DISCORD_CLIENT_ID` in `.env`):
+
+1. Open [Discord Developer Portal](https://discord.com/developers/applications) → your Minecadia Music app.
+2. **Activities → Settings**: enable **Activities**.
+3. **Activities → URL Mappings**: add mapping prefix `/` → target `music.kartersanamo.com` (host only, no `https://`).
+4. **OAuth2**: keep redirect `https://music.kartersanamo.com/oauth/callback` (used by dashboard OAuth and Activities).
+5. **Installation**: ensure **Guild Install** is enabled.
+6. **Bot → OAuth2 URL Generator** (or re-invite the bot): include permission **Set Voice Channel Status** (`SET_VOICE_CHANNEL_STATUS`) so the bot can show a hint when it joins voice.
+7. **Distribution** (optional): submit the Activity for public use; until approved, only the app’s developer team can launch it in production.
+
+After portal setup, restart MinecadiaMusic. Users can launch the dashboard in two ways:
+
+- **App Launcher → Minecadia Music** — uses the global Entry Point command (registered automatically on bot startup)
+- **`/music` panel → Launch Dashboard** — launches directly from the in-channel panel
 
 ## Setup
 

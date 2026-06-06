@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 import aiohttp
 from aiohttp import web
 
+from core.errors.exceptions import UserFacingError
 from services.music.session_manager import GuildMusicSession, MusicSessionManager
 
 
@@ -33,15 +34,22 @@ def session_from_request(
     return session, token
 
 
-async def discord_oauth_exchange(code: str) -> dict:
+def _oauth_client() -> tuple[str, str]:
     client_id = os.getenv("DISCORD_CLIENT_ID", "")
     client_secret = os.getenv("DISCORD_CLIENT_SECRET", "")
-    redirect = os.getenv(
-        "DISCORD_OAUTH_REDIRECT_URI",
-        "https://music.kartersanamo.com/oauth/callback",
-    )
     if not client_id or not client_secret:
         raise ValueError("Discord OAuth not configured")
+    return client_id, client_secret
+
+
+async def discord_oauth_exchange(code: str, *, redirect_uri: str | None = None) -> dict:
+    client_id, client_secret = _oauth_client()
+    redirect = redirect_uri
+    if redirect is None:
+        redirect = os.getenv(
+            "DISCORD_OAUTH_REDIRECT_URI",
+            "https://music.kartersanamo.com/oauth/callback",
+        )
     data = {
         "client_id": client_id,
         "client_secret": client_secret,
@@ -59,6 +67,11 @@ async def discord_oauth_exchange(code: str) -> dict:
                 body = await resp.text()
                 raise ValueError(f"Token exchange failed: {body}")
             return await resp.json()
+
+
+async def discord_oauth_exchange_activity(code: str) -> dict:
+    """Exchange an Embedded App SDK authorize code (empty redirect_uri)."""
+    return await discord_oauth_exchange(code, redirect_uri="")
 
 
 async def discord_fetch_user(access_token: str) -> dict:
@@ -88,3 +101,24 @@ def oauth_authorize_url(state: str) -> str:
         }
     )
     return f"https://discord.com/api/oauth2/authorize?{params}"
+
+
+async def activity_bootstrap_for_user(
+    manager: MusicSessionManager,
+    *,
+    guild_id: int,
+    user_id: int,
+) -> dict[str, str]:
+    import time
+
+    session = manager.sessions.get(guild_id)
+    if not session or not session.panel_owner_id:
+        raise UserFacingError("No music panel for this server. Run **`/music`** first.")
+    manager.check_member_web(session, user_id, need_queue=True)
+    session.oauth_users[user_id] = time.time()
+    return {
+        "sessionId": session.session_id,
+        "token": session.session_token,
+        "userId": str(user_id),
+        "panelUrl": session.public_url(),
+    }

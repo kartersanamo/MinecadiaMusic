@@ -1,12 +1,14 @@
 (function () {
   const parts = window.location.pathname.split("/").filter(Boolean);
-  const sessionId = (parts[0] || "").trim();
+  let sessionId = (parts[0] || "").trim();
   const params = new URLSearchParams(window.location.search);
   const urlToken = (params.get("token") || "").trim();
-  const token = urlToken || (sessionStorage.getItem("music_token") || "").trim();
+  let token = urlToken || (sessionStorage.getItem("music_token") || "").trim();
   if (token) sessionStorage.setItem("music_token", token);
 
-  const apiBase = `/api/session/${sessionId}`;
+  function getApiBase() {
+    return `/api/session/${sessionId}`;
+  }
   let ws = null;
   let state = null;
   let userId = sessionStorage.getItem("music_user_id") || "";
@@ -15,6 +17,7 @@
   let progressTimer = null;
   let searchLoading = false;
   let sessionExpired = false;
+  let activityBootstrapFailed = false;
 
   const userParam = params.get("user");
   if (userParam) {
@@ -92,9 +95,86 @@
     }
     showGate(
       "Link expired",
-      "This dashboard link is no longer valid. Open the <strong>/music</strong> panel in Discord and use the fresh link there."
+      "This dashboard link is no longer valid. Open the <strong>/music</strong> panel in Discord and use **Launch Dashboard** or the browser link there."
     );
     els.channelLabel.textContent = "Session expired";
+  }
+
+  function isDiscordActivityHost() {
+    return /\.discordsays\.com$/i.test(window.location.hostname);
+  }
+
+  async function tryActivityBootstrap() {
+    if (!isDiscordActivityHost()) return null;
+    const clientId = (
+      document.querySelector('meta[name="discord-client-id"]')?.content || ""
+    ).trim();
+    if (!clientId) return null;
+
+    try {
+      const { DiscordSDK } = await import("/static/discord-embedded-app-sdk.mjs");
+      const discordSdk = new DiscordSDK(clientId);
+      await discordSdk.ready();
+
+      const { code } = await discordSdk.commands.authorize({
+        client_id: clientId,
+        response_type: "code",
+        state: "",
+        prompt: "none",
+        scope: ["identify"],
+      });
+
+      const tokenRes = await fetch("/api/activity/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const tokenData = await tokenRes.json().catch(() => ({}));
+      if (!tokenRes.ok) {
+        throw new Error(tokenData.error || tokenRes.statusText);
+      }
+
+      const guildId = discordSdk.guildId;
+      if (!guildId) {
+        throw new Error("Open this Activity from a server voice channel.");
+      }
+
+      const bootRes = await fetch(
+        `/api/activity/bootstrap?guild_id=${encodeURIComponent(guildId)}`,
+        { headers: { Authorization: `Bearer ${tokenData.access_token}` } }
+      );
+      const boot = await bootRes.json().catch(() => ({}));
+      if (!bootRes.ok) {
+        throw new Error(boot.error || bootRes.statusText);
+      }
+      return boot;
+    } catch (err) {
+      console.error("Activity bootstrap failed", err);
+      activityBootstrapFailed = true;
+      showGate(
+        "Activity setup failed",
+        escapeHtml(String(err.message || err)) +
+          "<br><br>Run <strong>/music</strong> in this server first, then launch the Activity again."
+      );
+      return null;
+    }
+  }
+
+  async function bootstrapDashboardSession() {
+    const activity = await tryActivityBootstrap();
+    if (!activity) return;
+    sessionId = activity.sessionId;
+    token = activity.token;
+    userId = String(activity.userId || userId || "");
+    sessionStorage.setItem("music_token", token);
+    if (userId) sessionStorage.setItem("music_user_id", userId);
+    els.userLabel.textContent = "Signed in via Discord Activity";
+    els.userLabel.classList.remove("hidden");
+    els.btnLogin.classList.add("hidden");
+    if (window.history?.replaceState) {
+      const qs = userId ? `?user=${encodeURIComponent(userId)}` : "";
+      window.history.replaceState(null, "", `/${sessionId}${qs}`);
+    }
   }
 
   function setSignedInLabel() {
@@ -125,7 +205,7 @@
   }
 
   async function api(path, opts = {}) {
-    const res = await fetch(apiBase + path, {
+    const res = await fetch(getApiBase() + path, {
       ...opts,
       headers: { ...headers(opts.body != null), ...(opts.headers || {}) },
     });
@@ -583,12 +663,18 @@
 
   setSignedInLabel();
 
-  if (!hasSessionCredentials()) {
-    showGate(
-      "Session required",
-      "Open this page from the <strong>/music</strong> panel in Discord to get your private link."
-    );
-  } else {
+  async function startDashboard() {
+    await bootstrapDashboardSession();
+    if (activityBootstrapFailed) return;
+
+    if (!hasSessionCredentials()) {
+      showGate(
+        "Session required",
+        "Open this page from the <strong>/music</strong> panel in Discord, or use <strong>Launch Dashboard</strong> while in voice."
+      );
+      return;
+    }
+
     showMain();
     refresh();
     connectWs();
@@ -597,4 +683,9 @@
       if (state?.playing && !state?.paused && state?.current) updateProgressUi();
     }, 1000);
   }
+
+  startDashboard().catch((err) => {
+    console.error(err);
+    showGate("Unable to load", "Something went wrong loading the dashboard.");
+  });
 })();
