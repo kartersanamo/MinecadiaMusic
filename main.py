@@ -94,6 +94,13 @@ class Client(commands.Bot):
 
     @task("Logging in")
     async def on_ready(self):
+        from ui.views.music_panel_layout_view import register_persistent_music_panel
+
+        register_persistent_music_panel(self)
+        try:
+            await self.app.music.restore_panels()
+        except Exception as exc:
+            log_tasks.error("Failed to restore music panels: %s", exc)
         await self.update_presence()
         await self.remove_help()
         await self.sync_command_tree()

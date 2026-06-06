@@ -18,7 +18,7 @@ from assets.music_http.auth import (
 )
 from core.errors.exceptions import UserFacingError
 from services.music.queue import LoopMode
-from services.music.resolver import search_tracks
+from services.music.resolver import search_media
 
 if TYPE_CHECKING:
     from discord.ext import commands
@@ -26,6 +26,15 @@ if TYPE_CHECKING:
 log = logging.getLogger("music_http")
 _server: web.AppRunner | None = None
 _WEB_DIR = Path(__file__).resolve().parent.parent / "music_web"
+
+
+def _asset_version() -> str:
+    version = 0
+    for name in ("styles.css", "app.js", "index.html"):
+        path = _WEB_DIR / name
+        if path.is_file():
+            version = max(version, int(path.stat().st_mtime))
+    return str(version or 1)
 
 
 def _music_port() -> int:
@@ -48,6 +57,8 @@ def _parse_user_id(body: dict, session) -> int:
     uid = body.get("userId") or body.get("user_id")
     if uid:
         return int(uid)
+    if session.panel_creator_id:
+        return int(session.panel_creator_id)
     if session.oauth_users:
         return int(next(iter(session.oauth_users.keys())))
     raise web.HTTPUnauthorized(
@@ -72,14 +83,26 @@ async def start_music_http(bot: "commands.Bot") -> None:
         if not path.is_file():
             raise web.HTTPNotFound()
         ctype = "application/javascript" if path.suffix == ".js" else "text/css"
-        return web.Response(body=path.read_bytes(), content_type=ctype)
+        return web.Response(
+            body=path.read_bytes(),
+            content_type=ctype,
+            headers={
+                "Cache-Control": "public, max-age=3600",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     async def serve_spa(request: web.Request) -> web.Response:
         index = _WEB_DIR / "index.html"
         if not index.is_file():
             raise web.HTTPNotFound()
-        html = index.read_text(encoding="utf-8")
-        return web.Response(text=html, content_type="text/html")
+        version = _asset_version()
+        html = index.read_text(encoding="utf-8").replace("__ASSET_VERSION__", version)
+        return web.Response(
+            text=html,
+            content_type="text/html",
+            headers={"Cache-Control": "no-store"},
+        )
 
     async def api_state(request: web.Request) -> web.Response:
         session, _ = session_from_request(request, manager)
@@ -104,20 +127,8 @@ async def start_music_http(bot: "commands.Bot") -> None:
                     return _api_error_response(exc, context="api_search auth")
         if not q:
             return web.json_response({"results": []})
-        tracks = await search_tracks(q, limit=10)
-        results = []
-        for t in tracks:
-            results.append(
-                {
-                    "title": t.title,
-                    "author": t.author,
-                    "uri": t.uri,
-                    "duration": t.length,
-                    "artwork": t.artwork,
-                    "identifier": t.identifier,
-                }
-            )
-        return web.json_response({"results": results})
+        results = await search_media(q, limit=10)
+        return web.json_response({"results": [r.to_dict() for r in results]})
 
     async def api_queue_add(request: web.Request) -> web.Response:
         try:
@@ -126,15 +137,31 @@ async def start_music_http(bot: "commands.Bot") -> None:
             uid = _parse_user_id(body, session)
             member = manager.check_member_web(session, uid, need_queue=True)
             query = body.get("query") or body.get("uri")
-            if not query:
-                return web.json_response({"ok": False, "error": "query or uri required"}, status=400)
-            from services.music.resolver import resolve_query
+            identifier = body.get("identifier")
+            kind = str(body.get("kind", "track")).lower()
+            playlist_title = body.get("playlistTitle") or body.get("playlist_title")
+            if not identifier and not query:
+                return web.json_response({"ok": False, "error": "query or identifier required"}, status=400)
+            from services.music.resolver import resolve_query, tracks_from_identifier
 
-            result = await resolve_query(str(query))
-            tracks = result if isinstance(result, list) else list(result.tracks)
+            if identifier:
+                tracks = await tracks_from_identifier(str(identifier), kind=kind)
+            else:
+                result = await resolve_query(str(query))
+                if isinstance(result, list):
+                    tracks = result[:1]
+                else:
+                    tracks = list(result.tracks)
+                    kind = "playlist"
+                    playlist_title = playlist_title or result.name
             for t in tracks:
                 t.extras = {"requester_id": member.id}
-            count, started = await session.add_tracks(tracks, member.id)
+            count, started = await session.add_tracks(
+                tracks,
+                member.id,
+                connect_member=member,
+                playlist_title=playlist_title if kind == "playlist" else None,
+            )
             return web.json_response({"ok": True, "added": count, "started": started})
         except Exception as exc:
             return _api_error_response(exc, context="api_queue_add")
@@ -146,7 +173,7 @@ async def start_music_http(bot: "commands.Bot") -> None:
             uid = _parse_user_id(body, session)
             manager.check_member_web(session, uid, need_control=True)
             index = int(request.match_info["index"])
-            msg = await session.remove_at(index)
+            msg = await session.remove_at(index, actor_id=uid)
             return web.json_response({"ok": True, "message": msg})
         except Exception as exc:
             return _api_error_response(exc, context="api_queue_remove")
@@ -160,22 +187,26 @@ async def start_music_http(bot: "commands.Bot") -> None:
             action = str(body.get("action", "")).lower()
             msg = ""
             if action == "pause":
-                msg = await session.pause()
+                msg = await session.pause(actor_id=uid)
             elif action == "resume":
-                msg = await session.resume()
+                msg = await session.resume(actor_id=uid)
             elif action == "skip":
-                msg = await session.skip()
+                msg = await session.skip(actor_id=uid)
             elif action == "stop":
-                msg = await session.stop()
+                msg = await session.stop(actor_id=uid)
             elif action == "shuffle":
-                msg = await session.shuffle_queue()
+                msg = await session.shuffle_queue(actor_id=uid)
             elif action == "volume":
-                msg = await session.set_volume(int(body.get("level", 100)))
+                msg = await session.set_volume(int(body.get("level", 100)), actor_id=uid)
             elif action == "loop":
                 mode = LoopMode(str(body.get("mode", "off")))
-                msg = await session.set_loop(mode)
+                msg = await session.set_loop(mode, actor_id=uid)
             elif action == "move":
-                msg = await session.move_track(int(body["from"]), int(body["to"]))
+                msg = await session.move_track(
+                    int(body["from"]),
+                    int(body["to"]),
+                    actor_id=uid,
+                )
             else:
                 return web.json_response({"ok": False, "error": f"Unknown action: {action}"}, status=400)
             return web.json_response({"ok": True, "message": msg})

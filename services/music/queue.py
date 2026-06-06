@@ -6,6 +6,8 @@ from typing import Any, Optional
 
 import wavelink
 
+from services.music.search_results import external_url
+
 
 class LoopMode(str, Enum):
     OFF = "off"
@@ -49,6 +51,7 @@ class TrackInfo:
         return {
             "title": self.title,
             "uri": self.uri,
+            "linkUrl": external_url(self.uri, self.identifier),
             "durationMs": self.duration_ms,
             "durationText": self.duration_text,
             "author": self.author,

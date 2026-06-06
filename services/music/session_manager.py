@@ -17,11 +17,14 @@ from wavelink.exceptions import QueueEmpty
 
 from core.errors.exceptions import UserFacingError
 from core.config import ConfigManager
+from repositories.music_panel_repository import MusicPanelRepository
 from services.music.permissions import can_control, can_queue, require_voice
 from services.music.queue import LoopMode, TrackInfo
 from services.music.resolver import resolve_query
 
 log = logging.getLogger("Music")
+
+_ACTIVITY_MAX = 6
 
 
 def _music_cfg() -> dict:
@@ -44,6 +47,35 @@ class GuildMusicSession:
         self._last_track: Optional[wavelink.Playable] = None
         self._ws_callbacks: list[Callable[[], Awaitable[None] | None]] = []
         self.oauth_users: dict[int, float] = {}
+        self._activity_log: list[dict[str, Any]] = []
+        self._persist_task: Optional[asyncio.Task] = None
+
+    def _member_display_name(self, user_id: int) -> str:
+        guild = self.manager.bot.get_guild(self.guild_id)
+        if guild:
+            member = guild.get_member(user_id)
+            if member:
+                return member.display_name
+        return f"User {user_id}"
+
+    def log_activity(self, actor_id: int, text: str) -> None:
+        self._activity_log.append(
+            {
+                "actorId": str(actor_id),
+                "actorName": self._member_display_name(actor_id),
+                "text": text,
+                "at": time.time(),
+            }
+        )
+        if len(self._activity_log) > _ACTIVITY_MAX:
+            self._activity_log = self._activity_log[-_ACTIVITY_MAX:]
+        self.schedule_persist()
+
+    def _enrich_track_dict(self, track: dict[str, Any]) -> dict[str, Any]:
+        rid = track.get("requesterId")
+        if rid:
+            track = {**track, "requesterName": self._member_display_name(int(rid))}
+        return track
 
     def is_expired(self) -> bool:
         ttl = int(os.getenv("MUSIC_SESSION_TTL_SECONDS", "86400"))
@@ -57,11 +89,15 @@ class GuildMusicSession:
         self.panel_creator_id = user_id
         self.manager._by_session_id.pop(old_id, None)
         self.manager._by_session_id[self.session_id] = self
+        self.schedule_persist()
         return self.public_url()
 
     def public_url(self) -> str:
         base = os.getenv("MUSIC_PUBLIC_BASE_URL", "http://127.0.0.1:8790").rstrip("/")
-        return f"{base}/{self.session_id}?token={self.session_token}"
+        url = f"{base}/{self.session_id}?token={self.session_token}"
+        if self.panel_creator_id:
+            url += f"&user={self.panel_creator_id}"
+        return url
 
     def subscribe(self, cb: Callable[[], Awaitable[None] | None]) -> None:
         self._ws_callbacks.append(cb)
@@ -69,13 +105,60 @@ class GuildMusicSession:
     def bind_panel_message(self, message: discord.Message, owner_id: int) -> None:
         self.panel_message = message
         self.panel_owner_id = owner_id
+        self.text_channel_id = message.channel.id
+        self.schedule_persist()
 
     def clear_panel_binding(self) -> None:
         self.panel_message = None
         self.panel_owner_id = None
+        self.text_channel_id = None
         if self._panel_refresh_task and not self._panel_refresh_task.done():
             self._panel_refresh_task.cancel()
         self._panel_refresh_task = None
+        asyncio.create_task(self.manager.panel_repo.delete(self.guild_id))
+
+    def schedule_persist(self) -> None:
+        if not self.panel_message or not self.panel_owner_id:
+            return
+        if self._persist_task and not self._persist_task.done():
+            self._persist_task.cancel()
+        self._persist_task = asyncio.create_task(self._persist_panel())
+
+    async def _persist_panel(self) -> None:
+        try:
+            await asyncio.sleep(0.25)
+            if not self.panel_message or not self.panel_owner_id:
+                return
+            await self.manager.panel_repo.upsert(
+                guild_id=self.guild_id,
+                channel_id=self.panel_message.channel.id,
+                message_id=self.panel_message.id,
+                owner_id=self.panel_owner_id,
+                session_id=self.session_id,
+                session_token=self.session_token,
+                panel_creator_id=self.panel_creator_id,
+                loop_mode=self.loop_mode.value,
+                activity_log=self._activity_log,
+            )
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            log.debug("Failed to persist music panel", exc_info=True)
+
+    def apply_persisted_row(self, row: dict[str, Any]) -> None:
+        self.manager._by_session_id.pop(self.session_id, None)
+        self.session_id = str(row["session_id"])
+        self.session_token = str(row["session_token"])
+        self.panel_owner_id = int(row["owner_id"])
+        self.panel_creator_id = (
+            int(row["panel_creator_id"]) if row.get("panel_creator_id") else None
+        )
+        self.text_channel_id = int(row["channel_id"])
+        self.loop_mode = LoopMode(str(row.get("loop_mode") or "off"))
+        activity = row.get("activity_log") or []
+        if isinstance(activity, list):
+            self._activity_log = activity[-_ACTIVITY_MAX:]
+        self.manager._register_session(self)
 
     def _schedule_panel_refresh(self) -> None:
         if not self.panel_message:
@@ -169,10 +252,14 @@ class GuildMusicSession:
             if player.channel:
                 channel_name = player.channel.name
             if player.current:
-                current = TrackInfo.from_playable(player.current).to_dict()
+                current = self._enrich_track_dict(
+                    TrackInfo.from_playable(player.current).to_dict()
+                )
                 position = player.position or 0
             for t in player.queue:
-                queue_items.append(TrackInfo.from_playable(t).to_dict())
+                queue_items.append(
+                    self._enrich_track_dict(TrackInfo.from_playable(t).to_dict())
+                )
 
         return {
             "guildId": str(self.guild_id),
@@ -186,18 +273,33 @@ class GuildMusicSession:
             "volume": volume,
             "voiceChannel": channel_name,
             "panelUrl": self.public_url(),
+            "panelCreatorId": self.panel_creator_id,
+            "activity": list(self._activity_log),
         }
 
     async def add_tracks(
         self,
         tracks: list[wavelink.Playable],
         requester_id: int,
+        *,
+        connect_member: discord.Member | None = None,
+        playlist_title: str | None = None,
     ) -> tuple[int, bool]:
         if not tracks:
             raise UserFacingError("No tracks to add.")
         player = self.get_player()
+        if not player and connect_member:
+            channel = require_voice(connect_member)
+            if not channel:
+                raise UserFacingError(
+                    "Join a voice channel in Discord first, then try again."
+                )
+            player = await self.ensure_player(channel)
         if not player:
-            raise UserFacingError("Bot is not connected to a voice channel. Use **`/music`** and tap **Join VC**.")
+            raise UserFacingError(
+                "Bot is not connected to a voice channel. "
+                "Join a voice channel in Discord, or use **/music** and tap **Join VC**."
+            )
 
         max_len = int(_music_cfg().get("MAX_QUEUE_LENGTH", 200))
         if len(player.queue) + len(tracks) > max_len:
@@ -215,6 +317,21 @@ class GuildMusicSession:
         else:
             for t in tracks:
                 player.queue.put(t)
+
+        if len(tracks) == 1:
+            title = tracks[0].title or "Unknown"
+            if started:
+                self.log_activity(requester_id, f"started **{title}**")
+            else:
+                self.log_activity(requester_id, f"added **{title}** to the queue")
+        elif len(tracks) > 1:
+            if playlist_title:
+                self.log_activity(
+                    requester_id,
+                    f"added playlist **{playlist_title}** ({len(tracks)} tracks)",
+                )
+            else:
+                self.log_activity(requester_id, f"added **{len(tracks)} tracks** to the queue")
 
         await self.notify()
         return len(tracks), started
@@ -235,7 +352,7 @@ class GuildMusicSession:
             return f"Now playing **{tracks[0].title}**."
         return f"Added **{tracks[0].title}** to the queue ({count} track(s))."
 
-    async def pause(self) -> str:
+    async def pause(self, *, actor_id: int | None = None) -> str:
         player = self.get_player()
         if not player:
             raise UserFacingError("Not connected to voice.")
@@ -244,31 +361,40 @@ class GuildMusicSession:
         if player.paused:
             return "Playback is already paused."
         await player.pause(True)
+        if actor_id:
+            self.log_activity(actor_id, "paused playback")
         await self.notify()
         return "Paused playback."
 
-    async def resume(self) -> str:
+    async def resume(self, *, actor_id: int | None = None) -> str:
         player = self.get_player()
         if not player:
             raise UserFacingError("Not connected to voice.")
         if not player.paused:
             return "Playback is already running."
         await player.pause(False)
+        if actor_id:
+            self.log_activity(actor_id, "resumed playback")
         await self.notify()
         return "Resumed playback."
 
-    async def skip(self) -> str:
+    async def skip(self, *, actor_id: int | None = None) -> str:
         player = self.get_player()
         if not player:
             raise UserFacingError("Not connected to voice.")
         skipped = await player.skip(force=True)
         await self._play_next_queued(player)
+        if actor_id:
+            if skipped:
+                self.log_activity(actor_id, f"skipped **{skipped.title}**")
+            else:
+                self.log_activity(actor_id, "skipped the current track")
         await self.notify()
         if skipped:
             return f"Skipped **{skipped.title}**."
         return "Skipped."
 
-    async def stop(self) -> str:
+    async def stop(self, *, actor_id: int | None = None) -> str:
         player = self.get_player()
         if player:
             player.queue.clear()
@@ -276,20 +402,24 @@ class GuildMusicSession:
             await player.disconnect()
         self.loop_mode = LoopMode.OFF
         self._last_track = None
+        if actor_id:
+            self.log_activity(actor_id, "stopped playback and disconnected")
         await self.notify()
         self.clear_panel_binding()
         return "Stopped and disconnected."
 
-    async def set_volume(self, level: int) -> str:
+    async def set_volume(self, level: int, *, actor_id: int | None = None) -> str:
         player = self.get_player()
         if not player:
             raise UserFacingError("Not connected to voice.")
         level = max(0, min(150, level))
         await player.set_volume(level)
+        if actor_id:
+            self.log_activity(actor_id, f"set volume to **{level}%**")
         await self.notify()
         return f"Volume set to **{level}%**."
 
-    async def shuffle_queue(self) -> str:
+    async def shuffle_queue(self, *, actor_id: int | None = None) -> str:
         player = self.get_player()
         if not player or player.queue.is_empty:
             raise UserFacingError("Queue is empty.")
@@ -300,10 +430,12 @@ class GuildMusicSession:
         player.queue.clear()
         for t in items:
             player.queue.put(t)
+        if actor_id:
+            self.log_activity(actor_id, "shuffled the queue")
         await self.notify()
         return "Shuffled the queue."
 
-    async def remove_at(self, index: int) -> str:
+    async def remove_at(self, index: int, *, actor_id: int | None = None) -> str:
         player = self.get_player()
         if not player:
             raise UserFacingError("Not connected.")
@@ -311,33 +443,61 @@ class GuildMusicSession:
             raise UserFacingError("Invalid queue position.")
         removed = player.queue.peek(index)
         player.queue.delete(index)
+        if actor_id:
+            self.log_activity(
+                actor_id,
+                f"removed **{removed.title or 'Unknown'}** from the queue",
+            )
         await self.notify()
         return f"Removed **{removed.title}** from the queue."
 
-    async def move_track(self, from_index: int, to_index: int) -> str:
+    async def move_track(
+        self,
+        from_index: int,
+        to_index: int,
+        *,
+        actor_id: int | None = None,
+    ) -> str:
         player = self.get_player()
         if not player:
             raise UserFacingError("Not connected.")
         track = player.queue.peek(from_index)
         player.queue.delete(from_index)
         player.queue.put_at(to_index, track)
+        if actor_id:
+            self.log_activity(actor_id, f"moved **{track.title or 'Unknown'}** in the queue")
         await self.notify()
         return f"Moved **{track.title}**."
 
-    async def set_loop(self, mode: LoopMode) -> str:
+    async def set_loop(self, mode: LoopMode, *, actor_id: int | None = None) -> str:
         self.loop_mode = mode
         player = self.get_player()
         if player:
             self._sync_queue_mode(player)
+        if actor_id:
+            self.log_activity(actor_id, f"set loop to **{mode.value}**")
+        self.schedule_persist()
         await self.notify()
         return f"Loop mode set to **{mode.value}**."
 
-    async def handle_track_end(self, player: wavelink.Player, track: wavelink.Playable) -> None:
+    async def handle_track_end(self, player: wavelink.Player | None, track: wavelink.Playable | None) -> None:
+        if not player:
+            await self.notify()
+            return
         if player.queue.is_empty and not player.playing:
             idle = int(_music_cfg().get("IDLE_DISCONNECT_SECONDS", 300))
             await asyncio.sleep(idle)
-            if player.queue.is_empty and not player.playing:
-                await player.disconnect()
+            current = self.get_player()
+            if (
+                current
+                and current.queue.is_empty
+                and not current.playing
+                and current.channel
+            ):
+                try:
+                    await current.disconnect()
+                except Exception:
+                    log.debug("Idle disconnect failed", exc_info=True)
         await self.notify()
 
 
@@ -347,6 +507,41 @@ class MusicSessionManager:
         self.sessions: dict[int, GuildMusicSession] = {}
         self._by_session_id: dict[str, GuildMusicSession] = {}
         self._lavalink_ready = False
+        self.panel_repo = MusicPanelRepository()
+
+    async def restore_panels(self) -> None:
+        rows = await self.panel_repo.fetch_all()
+        if not rows:
+            return
+        from ui.views.music_panel_support import refresh_bound_panel
+
+        restored = 0
+        for row in rows:
+            guild_id = int(row["guild_id"])
+            guild = self.bot.get_guild(guild_id)
+            if not guild:
+                continue
+            session = self.get_session(guild_id)
+            session.apply_persisted_row(row)
+            channel = guild.get_channel(int(row["channel_id"]))
+            if not isinstance(channel, discord.TextChannel):
+                await self.panel_repo.delete(guild_id)
+                session.clear_panel_binding()
+                continue
+            try:
+                message = await channel.fetch_message(int(row["message_id"]))
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                await self.panel_repo.delete(guild_id)
+                session.clear_panel_binding()
+                continue
+            session.panel_message = message
+            restored += 1
+            try:
+                await refresh_bound_panel(session, self.bot)
+            except discord.HTTPException:
+                log.debug("Could not refresh restored panel for guild %s", guild_id, exc_info=True)
+        if restored:
+            log.info("Restored %s music panel(s) from database", restored)
 
     async def connect_lavalink(self) -> None:
         if self._lavalink_ready:
@@ -393,18 +588,22 @@ class MusicSessionManager:
     async def register_events(self) -> None:
         @self.bot.listen()
         async def on_wavelink_track_start(payload: wavelink.TrackStartEventPayload) -> None:
-            guild_id = payload.player.guild.id
-            session = self.sessions.get(guild_id)
+            player = payload.player
+            if not player or not player.guild:
+                return
+            session = self.sessions.get(player.guild.id)
             if session and payload.track:
                 session._last_track = payload.track
                 await session.notify()
 
         @self.bot.listen()
         async def on_wavelink_track_end(payload: wavelink.TrackEndEventPayload) -> None:
-            guild_id = payload.player.guild.id
-            session = self.sessions.get(guild_id)
+            player = payload.player
+            if not player or not player.guild:
+                return
+            session = self.sessions.get(player.guild.id)
             if session:
-                await session.handle_track_end(payload.player, payload.track)
+                await session.handle_track_end(player, payload.track)
                 if payload.track:
                     session._last_track = payload.track
 
@@ -412,23 +611,23 @@ class MusicSessionManager:
         async def on_wavelink_track_exception(
             payload: wavelink.TrackExceptionEventPayload,
         ) -> None:
+            player = payload.player
+            guild_id = player.guild.id if player and player.guild else None
             exc = payload.exception or {}
             message = str(exc.get("message", ""))
             cause = str(exc.get("cause", ""))
             log.warning(
                 "Track failed to play (guild=%s): %s — %s",
-                getattr(payload.player.guild, "id", "?"),
+                guild_id or "?",
                 message[:120],
                 cause[:200],
             )
-            player = payload.player
-            if not player:
+            if not player or not player.guild:
                 return
             session = self.sessions.get(player.guild.id)
             if "login" in message.lower() or "All clients failed" in cause:
                 log.warning(
-                    "YouTube blocked playback — complete Lavalink OAuth setup "
-                    "(see MinecadiaUtilities/docs/MUSIC_LAVALINK.md)."
+                    "YouTube blocked playback — complete Lavalink OAuth setup"
                 )
             try:
                 await player.skip(force=True)

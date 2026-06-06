@@ -31,19 +31,40 @@ plugins:
     allowSearch: true
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true
-    # Required for reliable YouTube playback (use a burner Google account).
     oauth:
       enabled: true
       skipInitialization: true
       # refreshToken: "paste after Lavalink OAuth flow (burner Google account)"
     remoteCipher:
       url: "https://cipher.kikkia.dev"
-      userAgent: "MinecadiaUtilities"
+      userAgent: "MinecadiaMusic"
     clients:
       - TV
       - WEBEMBEDDED
+      - WEB
+      - ANDROID_VR
       - MUSIC
     clientOptions:
+      TV:
+        playback: true
+        videoLoading: true
+        searching: false
+        playlistLoading: false
+      WEBEMBEDDED:
+        playback: true
+        videoLoading: true
+        searching: false
+        playlistLoading: false
+      WEB:
+        playback: true
+        videoLoading: true
+        searching: true
+        playlistLoading: true
+      ANDROID_VR:
+        playback: true
+        videoLoading: true
+        searching: true
+        playlistLoading: true
       TV:
         playback: true
         videoLoading: true
@@ -52,10 +73,5 @@ plugins:
       MUSIC:
         playback: false
         videoLoading: false
-        searching: false
-        playlistLoading: false
-      WEBEMBEDDED:
-        playback: true
-        videoLoading: true
         searching: true
         playlistLoading: false

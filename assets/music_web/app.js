@@ -1,14 +1,114 @@
 (function () {
   const parts = window.location.pathname.split("/").filter(Boolean);
-  const sessionId = parts[0] || "";
+  const sessionId = (parts[0] || "").trim();
   const params = new URLSearchParams(window.location.search);
-  const token = params.get("token") || sessionStorage.getItem("music_token") || "";
+  const urlToken = (params.get("token") || "").trim();
+  const token = urlToken || (sessionStorage.getItem("music_token") || "").trim();
   if (token) sessionStorage.setItem("music_token", token);
 
   const apiBase = `/api/session/${sessionId}`;
   let ws = null;
   let state = null;
   let userId = sessionStorage.getItem("music_user_id") || "";
+  let positionBase = 0;
+  let positionAt = Date.now();
+  let progressTimer = null;
+  let searchLoading = false;
+  let sessionExpired = false;
+
+  const userParam = params.get("user");
+  if (userParam) {
+    userId = userParam;
+    sessionStorage.setItem("music_user_id", userParam);
+  }
+
+  const els = {
+    gate: document.getElementById("gate"),
+    gateTitle: document.getElementById("gateTitle"),
+    gateMessage: document.getElementById("gateMessage"),
+    main: document.getElementById("main"),
+    channelLabel: document.getElementById("channelLabel"),
+    livePill: document.getElementById("livePill"),
+    userLabel: document.getElementById("userLabel"),
+    btnLogin: document.getElementById("btnLogin"),
+    ambient: document.getElementById("ambient"),
+    heroBackdrop: document.getElementById("heroBackdrop"),
+    npArt: document.getElementById("npArt"),
+    npTitle: document.getElementById("npTitle"),
+    npAuthor: document.getElementById("npAuthor"),
+    statusChip: document.getElementById("statusChip"),
+    loopChip: document.getElementById("loopChip"),
+    progressBar: document.getElementById("progressBar"),
+    npPos: document.getElementById("npPos"),
+    npDur: document.getElementById("npDur"),
+    btnPlayPause: document.getElementById("btnPlayPause"),
+    volume: document.getElementById("volume"),
+    volumeLabel: document.getElementById("volumeLabel"),
+    loopGroup: document.getElementById("loopGroup"),
+    searchInput: document.getElementById("searchInput"),
+    btnSearch: document.getElementById("btnSearch"),
+    searchEmpty: document.getElementById("searchEmpty"),
+    searchResults: document.getElementById("searchResults"),
+    queueList: document.getElementById("queueList"),
+    queueEmpty: document.getElementById("queueEmpty"),
+    queueCount: document.getElementById("queueCount"),
+    queueSubtitle: document.getElementById("queueSubtitle"),
+    activityList: document.getElementById("activityList"),
+    activityEmpty: document.getElementById("activityEmpty"),
+    toast: document.getElementById("toast"),
+  };
+
+  function showGate(title, message) {
+    if (title) els.gateTitle.textContent = title;
+    if (message) els.gateMessage.innerHTML = message;
+    els.gate.classList.remove("hidden");
+    els.gate.hidden = false;
+    els.main.classList.add("hidden");
+    els.main.hidden = true;
+    setLive(false);
+  }
+
+  function showMain() {
+    els.gate.classList.add("hidden");
+    els.gate.hidden = true;
+    els.main.classList.remove("hidden");
+    els.main.hidden = false;
+  }
+
+  function looksLikeSessionId(value) {
+    return /^[0-9a-f-]{36}$/i.test(value);
+  }
+
+  function hasSessionCredentials() {
+    return looksLikeSessionId(sessionId) && token.length > 0;
+  }
+
+  function showSessionExpired() {
+    sessionExpired = true;
+    if (ws) {
+      ws.onclose = null;
+      ws.close();
+      ws = null;
+    }
+    showGate(
+      "Link expired",
+      "This dashboard link is no longer valid. Open the <strong>/music</strong> panel in Discord and use the fresh link there."
+    );
+    els.channelLabel.textContent = "Session expired";
+  }
+
+  function setSignedInLabel() {
+    if (!userId) return;
+    els.userLabel.textContent = "Linked via Discord";
+    els.userLabel.classList.remove("hidden");
+    els.btnLogin.classList.add("hidden");
+  }
+
+  function setLive(online) {
+    els.livePill.classList.toggle("online", online);
+    els.livePill.classList.toggle("offline", !online);
+    els.livePill.title = online ? "Receiving live updates" : "Reconnecting…";
+  }
 
   function headers(json) {
     const h = { Authorization: `Bearer ${token}` };
@@ -16,11 +116,12 @@
     return h;
   }
 
+  let toastTimer;
   function toast(msg) {
-    const el = document.getElementById("toast");
-    el.textContent = msg;
-    el.classList.remove("hidden");
-    setTimeout(() => el.classList.add("hidden"), 3000);
+    els.toast.innerHTML = formatDiscordMarkdown(msg);
+    els.toast.classList.remove("hidden");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => els.toast.classList.add("hidden"), 4200);
   }
 
   async function api(path, opts = {}) {
@@ -33,72 +134,277 @@
     return data;
   }
 
-  function render() {
-    if (!state) return;
-    document.getElementById("channelLabel").textContent = state.voiceChannel
-      ? `Voice: ${state.voiceChannel}`
-      : "Not in a voice channel";
-    const cur = state.current;
-    document.getElementById("npTitle").textContent = cur ? cur.title : "Nothing playing";
-    document.getElementById("npAuthor").textContent = cur ? cur.author : "";
-    const art = document.getElementById("npArt");
-    art.style.backgroundImage = cur && cur.artwork ? `url(${cur.artwork})` : "none";
-    const dur = cur ? cur.durationMs : 0;
-    const pos = state.positionMs || 0;
-    const pct = dur > 0 ? Math.min(100, (pos / dur) * 100) : 0;
-    document.getElementById("progressBar").style.width = `${pct}%`;
-    document.getElementById("npTime").textContent = cur
-      ? `${formatMs(pos)} / ${cur.durationText}`
-      : "";
-    document.getElementById("loopSelect").value = state.loopMode || "off";
-    document.getElementById("volume").value = state.volume ?? 100;
-
-    const list = document.getElementById("queueList");
-    list.innerHTML = "";
-    (state.queue || []).forEach((t, i) => {
-      const li = document.createElement("li");
-      li.innerHTML = `<span>${i + 1}. ${escapeHtml(t.title)} <small class="muted">${escapeHtml(t.author)}</small></span>`;
-      const rm = document.createElement("button");
-      rm.textContent = "Remove";
-      rm.className = "secondary";
-      rm.onclick = () => removeQueue(i);
-      li.appendChild(rm);
-      list.appendChild(li);
-    });
-  }
-
   function escapeHtml(s) {
     const d = document.createElement("div");
     d.textContent = s;
     return d.innerHTML;
   }
 
+  const YT_VIDEO_ID_RE =
+    /(?:youtube\.com\/(?:watch\?(?:[^&\s]+&)*v=|embed\/|v\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/i;
+
+  function externalUrl(item) {
+    if (!item) return null;
+    const candidates = [item.linkUrl, item.uri, item.identifier];
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      const value = String(candidate).trim();
+      if (value.startsWith("http://") || value.startsWith("https://")) {
+        if (value.includes("youtube") || value.includes("youtu.be")) {
+          const match = value.match(YT_VIDEO_ID_RE);
+          if (match) return `https://www.youtube.com/watch?v=${match[1]}`;
+        }
+        return value;
+      }
+      const match = value.match(YT_VIDEO_ID_RE);
+      if (match) return `https://www.youtube.com/watch?v=${match[1]}`;
+    }
+    return null;
+  }
+
+  function linkHtml(title, item, { className = "" } = {}) {
+    const label = escapeHtml(title || "Unknown");
+    const url = externalUrl(item);
+    if (!url) return label;
+    const cls = className ? ` class="${className}"` : "";
+    return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer"${cls}>${label}</a>`;
+  }
+
+  function formatDiscordMarkdown(text) {
+    if (!text) return "";
+    let s = escapeHtml(String(text));
+    s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+    return s;
+  }
+
   function formatMs(ms) {
-    const s = Math.floor(ms / 1000);
+    const s = Math.max(0, Math.floor(ms / 1000));
     const m = Math.floor(s / 60);
+    const h = Math.floor(m / 60);
     const sec = s % 60;
+    const min = m % 60;
+    if (h) return `${h}:${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
     return `${m}:${String(sec).padStart(2, "0")}`;
+  }
+
+  function formatRelativeTime(unixSeconds) {
+    if (!unixSeconds) return "";
+    const diff = Math.max(0, Math.floor(Date.now() / 1000 - unixSeconds));
+    if (diff < 10) return "just now";
+    if (diff < 60) return `${diff}s ago`;
+    const min = Math.floor(diff / 60);
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h ago`;
+    return `${Math.floor(hr / 24)}d ago`;
+  }
+
+  function currentPositionMs() {
+    if (!state?.playing || state?.paused) return state?.positionMs || 0;
+    return positionBase + (Date.now() - positionAt);
+  }
+
+  function syncPositionFromState() {
+    positionBase = state?.positionMs || 0;
+    positionAt = Date.now();
+  }
+
+  function updateProgressUi() {
+    const cur = state?.current;
+    const dur = cur?.durationMs || 0;
+    const pos = cur ? currentPositionMs() : 0;
+    const pct = dur > 0 ? Math.min(100, (pos / dur) * 100) : 0;
+    els.progressBar.style.width = `${pct}%`;
+    els.npPos.textContent = formatMs(pos);
+    els.npDur.textContent = cur?.durationText || formatMs(dur);
+  }
+
+  function renderPlaybackControls() {
+    const playing = !!state?.playing;
+    const paused = !!state?.paused;
+    const btn = els.btnPlayPause;
+    const iconPause = btn.querySelector(".icon-pause");
+    const iconPlay = btn.querySelector(".icon-play");
+
+    if (playing && !paused) {
+      btn.dataset.action = "pause";
+      btn.title = "Pause";
+      iconPause.classList.remove("hidden");
+      iconPlay.classList.add("hidden");
+      els.statusChip.textContent = "Playing";
+      els.statusChip.className = "status-chip playing";
+    } else if (paused) {
+      btn.dataset.action = "resume";
+      btn.title = "Resume";
+      iconPause.classList.add("hidden");
+      iconPlay.classList.remove("hidden");
+      els.statusChip.textContent = "Paused";
+      els.statusChip.className = "status-chip paused";
+    } else {
+      btn.dataset.action = "resume";
+      btn.title = "Play";
+      iconPause.classList.add("hidden");
+      iconPlay.classList.remove("hidden");
+      els.statusChip.textContent = "Idle";
+      els.statusChip.className = "status-chip";
+    }
+  }
+
+  function renderLoopControls() {
+    const mode = state?.loopMode || "off";
+    els.loopGroup.querySelectorAll(".segmented-btn").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.loop === mode);
+    });
+    if (mode === "off") {
+      els.loopChip.classList.add("hidden");
+    } else {
+      els.loopChip.classList.remove("hidden");
+      els.loopChip.textContent = mode === "track" ? "Loop track" : "Loop queue";
+    }
+  }
+
+  function render() {
+    if (!state) return;
+
+    els.channelLabel.textContent = state.voiceChannel
+      ? `In ${state.voiceChannel}`
+      : "Not in voice — join a VC in Discord";
+
+    const cur = state.current;
+    if (cur) {
+      els.npTitle.innerHTML = linkHtml(cur.title, cur, { className: "track-link" });
+    } else {
+      els.npTitle.textContent = "Nothing playing";
+    }
+
+    if (cur) {
+      const parts = [];
+      if (cur.author) parts.push(escapeHtml(cur.author));
+      if (cur.requesterName) parts.push(`queued by ${escapeHtml(cur.requesterName)}`);
+      const meta = parts.join(" · ");
+      const url = externalUrl(cur);
+      els.npAuthor.innerHTML = url
+        ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${meta || "Open source"}</a>`
+        : meta;
+    } else {
+      els.npAuthor.textContent = "Search below to start listening";
+    }
+
+    const artUrl = cur?.artwork || "";
+    const trackUrl = externalUrl(cur);
+    els.npArt.classList.toggle("has-art", !!artUrl);
+    els.npArt.classList.toggle("is-clickable", !!trackUrl);
+    els.npArt.style.backgroundImage = artUrl ? `url(${artUrl})` : "";
+    els.npArt.onclick = trackUrl
+      ? () => window.open(trackUrl, "_blank", "noopener,noreferrer")
+      : null;
+    els.npArt.title = trackUrl ? "Open source" : "";
+    els.heroBackdrop.hidden = !artUrl;
+    els.heroBackdrop.style.backgroundImage = artUrl ? `url(${artUrl})` : "";
+    if (artUrl) {
+      els.ambient.style.background = `
+        radial-gradient(ellipse 70% 50% at 30% 0%, rgba(241, 196, 15, 0.14), transparent 55%),
+        radial-gradient(ellipse 50% 40% at 80% 20%, rgba(88, 101, 242, 0.08), transparent 50%),
+        radial-gradient(ellipse 60% 40% at 50% 100%, rgba(241, 196, 15, 0.05), transparent 50%)`;
+    }
+
+    syncPositionFromState();
+    updateProgressUi();
+    renderPlaybackControls();
+    renderLoopControls();
+
+    const vol = state.volume ?? 100;
+    els.volume.value = vol;
+    els.volumeLabel.textContent = `${vol}%`;
+
+    const queue = state.queue || [];
+    els.queueCount.textContent = String(queue.length);
+    els.queueSubtitle.textContent = queue.length
+      ? `${queue.length} track${queue.length === 1 ? "" : "s"} waiting`
+      : "Nothing queued";
+
+    els.queueList.innerHTML = "";
+    queue.forEach((t, i) => {
+      const li = document.createElement("li");
+      li.className = "queue-item" + (t.artwork ? " has-art" : "");
+      const req = t.requesterName ? ` · ${escapeHtml(t.requesterName)}` : "";
+      const dur = t.durationText ? ` · ${escapeHtml(t.durationText)}` : "";
+      li.innerHTML = `
+        <span class="queue-index">${i + 1}</span>
+        <div class="queue-art" style="${t.artwork ? `background-image:url(${escapeHtml(t.artwork)})` : ""}"></div>
+        <div class="queue-info">
+          <p class="queue-title">${linkHtml(t.title, t, { className: "track-link" })}</p>
+          <p class="queue-sub">${escapeHtml(t.author || "Unknown")}${dur}${req}</p>
+        </div>
+        <button type="button" class="btn-remove" title="Remove" aria-label="Remove from queue">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>`;
+      li.querySelector(".btn-remove").onclick = () => removeQueue(i);
+      els.queueList.appendChild(li);
+    });
+    els.queueEmpty.style.display = queue.length ? "none" : "";
+
+    const activity = state.activity || [];
+    els.activityList.innerHTML = "";
+    if (!activity.length) {
+      els.activityEmpty.classList.remove("hidden");
+    } else {
+      els.activityEmpty.classList.add("hidden");
+      activity.slice(-6).forEach((entry) => {
+        const li = document.createElement("li");
+        li.className = "activity-item";
+        const who = escapeHtml(entry.actorName || "Someone");
+        const text = entry.text || "";
+        const rel = formatRelativeTime(entry.at);
+        li.innerHTML = `
+          <span class="activity-time">${escapeHtml(rel)}</span>
+          <div class="activity-body"><strong>${who}</strong> ${formatDiscordMarkdown(text)}</div>`;
+        els.activityList.appendChild(li);
+      });
+    }
+  }
+
+  function applyState(next) {
+    state = next;
+    render();
   }
 
   async function refresh() {
     try {
-      state = await api("/state");
-      render();
+      const data = await api("/state");
+      if (data.panelCreatorId && !userId) {
+        userId = String(data.panelCreatorId);
+        sessionStorage.setItem("music_user_id", userId);
+        setSignedInLabel();
+      }
+      applyState(data);
     } catch (e) {
-      toast(e.message);
+      const msg = String(e.message || "");
+      if (/invalid or expired session/i.test(msg)) {
+        showSessionExpired();
+        return;
+      }
+      toast(msg);
     }
   }
 
   function connectWs() {
+    if (sessionExpired) return;
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    ws = new WebSocket(`${proto}//${location.host}/api/session/${sessionId}/ws?token=${encodeURIComponent(token)}`);
+    ws = new WebSocket(
+      `${proto}//${location.host}/api/session/${sessionId}/ws?token=${encodeURIComponent(token)}`
+    );
+    ws.onopen = () => setLive(true);
     ws.onmessage = (ev) => {
       try {
-        state = JSON.parse(ev.data);
-        render();
+        applyState(JSON.parse(ev.data));
       } catch (_) {}
     };
-    ws.onclose = () => setTimeout(connectWs, 3000);
+    ws.onclose = () => {
+      setLive(false);
+      if (!sessionExpired) setTimeout(connectWs, 3000);
+    };
   }
 
   async function control(action, extra = {}) {
@@ -107,7 +413,7 @@
         method: "POST",
         body: JSON.stringify({ action, userId, ...extra }),
       });
-      toast(data.message || (data.ok === false ? data.error : null) || "OK");
+      if (data.message) toast(data.message);
       await refresh();
     } catch (e) {
       toast(e.message);
@@ -120,77 +426,175 @@
         method: "DELETE",
         body: JSON.stringify({ userId }),
       });
+      toast("Removed from queue");
       await refresh();
     } catch (e) {
       toast(e.message);
     }
   }
 
-  document.querySelectorAll(".transport button").forEach((btn) => {
-    btn.addEventListener("click", () => control(btn.dataset.action));
-  });
+  async function addToQueue(item) {
+    const isPlaylist = item.kind === "playlist";
+    await api("/queue", {
+      method: "POST",
+      body: JSON.stringify({
+        userId,
+        kind: isPlaylist ? "playlist" : "track",
+        identifier: item.identifier,
+        playlistTitle: isPlaylist ? item.title : undefined,
+        query: item.uri || item.title,
+      }),
+    });
+    toast(isPlaylist ? `Added playlist (${item.trackCount} tracks)` : "Added to queue");
+    await refresh();
+  }
 
-  document.getElementById("loopSelect").addEventListener("change", (e) => {
-    control("loop", { mode: e.target.value });
-  });
+  function renderSearchResults(results) {
+    els.searchResults.innerHTML = "";
+    if (!results.length) {
+      els.searchResults.classList.add("hidden");
+      els.searchEmpty.textContent = "No results — try another search or paste a direct link.";
+      els.searchEmpty.classList.remove("hidden");
+      return;
+    }
+    els.searchEmpty.classList.add("hidden");
+    els.searchResults.classList.remove("hidden");
 
-  document.getElementById("volume").addEventListener("change", (e) => {
-    control("volume", { level: parseInt(e.target.value, 10) });
-  });
+    results.forEach((t) => {
+      const isPlaylist = t.kind === "playlist";
+      const card = document.createElement("li");
+      card.className = "result-card" + (isPlaylist ? " is-playlist" : "");
 
-  document.getElementById("btnSearch").addEventListener("click", async () => {
-    const q = document.getElementById("searchInput").value.trim();
-    if (!q) return;
+      const artStyle = t.artwork ? `background-image:url(${escapeHtml(t.artwork)})` : "";
+      const meta = isPlaylist
+        ? `${escapeHtml(t.author || "Unknown")} · ${t.trackCount} tracks`
+        : `${escapeHtml(t.author || "Unknown")}${t.durationText ? ` · ${escapeHtml(t.durationText)}` : ""}`;
+
+      let tracksHtml = "";
+      if (isPlaylist && (t.tracks || []).length) {
+        tracksHtml =
+          '<ol class="playlist-tracks">' +
+          t.tracks
+            .map(
+              (track, idx) =>
+                `<li>${idx + 1}. ${linkHtml(track.title, track, { className: "track-link" })} — ${escapeHtml(track.author)}</li>`
+            )
+            .join("") +
+          "</ol>";
+      }
+
+      const openLink = externalUrl(t);
+      card.innerHTML = `
+        <div class="result-art" style="${artStyle}">
+          ${t.artwork ? "" : '<svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 14.17V7h6V3h-8z" fill="currentColor"/></svg>'}
+        </div>
+        <div class="result-body">
+          <p class="result-title">${linkHtml(t.title, t, { className: "track-link" })}</p>
+          <p class="result-meta">${meta}${openLink ? ' · <a class="track-link" href="' + escapeHtml(openLink) + '" target="_blank" rel="noopener noreferrer">Open</a>' : ""}</p>
+          ${isPlaylist ? '<span class="badge badge-playlist">Playlist</span>' : ""}
+          ${tracksHtml}
+        </div>
+        <div class="result-actions">
+          <button type="button" class="btn btn-sm btn-add">${isPlaylist ? `Add all (${t.trackCount})` : "Add"}</button>
+        </div>`;
+
+      card.querySelector(".btn-add").onclick = async () => {
+        try {
+          await addToQueue(t);
+        } catch (e) {
+          toast(e.message);
+        }
+      };
+      if (openLink) {
+        const art = card.querySelector(".result-art");
+        if (art) {
+          art.classList.add("is-clickable");
+          art.title = "Open source";
+          art.onclick = () => window.open(openLink, "_blank", "noopener,noreferrer");
+        }
+      }
+      els.searchResults.appendChild(card);
+    });
+  }
+
+  async function runSearch() {
+    const q = els.searchInput.value.trim();
+    if (!q || searchLoading) return;
+    searchLoading = true;
+    els.btnSearch.disabled = true;
+    els.btnSearch.innerHTML = '<span class="spinner"></span>Searching';
     try {
       const data = await api(`/search?q=${encodeURIComponent(q)}`, {
         method: "POST",
         body: JSON.stringify({ userId, query: q }),
       });
-      const ul = document.getElementById("searchResults");
-      ul.innerHTML = "";
-      (data.results || []).forEach((t) => {
-        const li = document.createElement("li");
-        li.innerHTML = `<span>${escapeHtml(t.title)} — ${escapeHtml(t.author)}</span>`;
-        const add = document.createElement("button");
-        add.textContent = "Add";
-        add.onclick = async () => {
-          try {
-            await api("/queue", {
-              method: "POST",
-              body: JSON.stringify({ userId, query: t.uri || t.title }),
-            });
-            toast("Added to queue");
-            await refresh();
-          } catch (e) {
-            toast(e.message);
-          }
-        };
-        li.appendChild(add);
-        ul.appendChild(li);
-      });
+      renderSearchResults(data.results || []);
     } catch (e) {
       toast(e.message);
+    } finally {
+      searchLoading = false;
+      els.btnSearch.disabled = false;
+      els.btnSearch.textContent = "Search";
     }
+  }
+
+  // Event wiring
+  document.querySelectorAll(".transport .icon-btn[data-action]").forEach((btn) => {
+    if (btn.id === "btnPlayPause") return;
+    btn.addEventListener("click", () => control(btn.dataset.action));
   });
 
-  document.getElementById("btnLogin").addEventListener("click", async () => {
+  els.btnPlayPause.addEventListener("click", () => control(els.btnPlayPause.dataset.action));
+
+  els.loopGroup.querySelectorAll(".segmented-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (btn.classList.contains("active")) return;
+      control("loop", { mode: btn.dataset.loop });
+    });
+  });
+
+  els.volume.addEventListener("input", (e) => {
+    els.volumeLabel.textContent = `${e.target.value}%`;
+  });
+
+  els.volume.addEventListener("change", (e) => {
+    control("volume", { level: parseInt(e.target.value, 10) });
+  });
+
+  els.btnSearch.addEventListener("click", runSearch);
+  els.searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") runSearch();
+  });
+
+  els.btnLogin.addEventListener("click", async () => {
     try {
       const data = await api("/oauth");
       window.location.href = data.url;
     } catch (e) {
-      toast(e.message || "OAuth not configured — use token link from Discord");
+      toast(e.message || "OAuth not configured — use the link from Discord");
     }
   });
 
   if (params.get("logged_in")) {
-    document.getElementById("userLabel").textContent = "Signed in with Discord";
+    els.userLabel.textContent = "Signed in with Discord";
+    els.userLabel.classList.remove("hidden");
+    els.btnLogin.classList.add("hidden");
   }
 
-  if (!sessionId || !token) {
-    toast("Missing session or token in URL");
+  setSignedInLabel();
+
+  if (!hasSessionCredentials()) {
+    showGate(
+      "Session required",
+      "Open this page from the <strong>/music</strong> panel in Discord to get your private link."
+    );
   } else {
+    showMain();
     refresh();
     connectWs();
-    setInterval(refresh, 15000);
+    setInterval(refresh, 20000);
+    progressTimer = setInterval(() => {
+      if (state?.playing && !state?.paused && state?.current) updateProgressUi();
+    }, 1000);
   }
 })();
