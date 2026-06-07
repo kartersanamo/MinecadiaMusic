@@ -37,23 +37,85 @@ def _entry_point_command_type(interaction: discord.Interaction) -> int | None:
     return getattr(data, "type", None)
 
 
-def install_activity_entry_point(bot: "commands.Bot") -> None:
-    """Handle App Launcher Entry Point interactions before the command tree misroutes them."""
+_ACTIVITY_UNSUPPORTED_PLATFORM_CODES = frozenset({50230, 50231})
 
-    @bot.tree.interaction_check
+
+def activity_launch_error_message(
+    exc: discord.HTTPException,
+    *,
+    panel_url: str | None = None,
+) -> str:
+    code = getattr(exc, "code", None)
+    if code in _ACTIVITY_UNSUPPORTED_PLATFORM_CODES:
+        lines = [
+            "The in-Discord dashboard is not available on your device yet.",
+            "Use **Open in browser** on the `/music` panel instead.",
+        ]
+        if panel_url:
+            lines.append(panel_url)
+        return "\n".join(lines)
+    return "Could not launch the music dashboard. Run **`/music`** in this server first."
+
+
+async def launch_music_activity(
+    interaction: discord.Interaction,
+    *,
+    panel_url: str | None = None,
+) -> bool:
+    """Respond to an interaction by launching the Discord Activity. Returns True on success."""
+    try:
+        await interaction.response.launch_activity()
+        log.info(
+            "Launched Activity for user %s in guild %s",
+            interaction.user.id,
+            interaction.guild_id,
+        )
+        return True
+    except discord.HTTPException as exc:
+        log.warning(
+            "Activity launch failed for user %s (code=%s): %s",
+            interaction.user.id,
+            getattr(exc, "code", None),
+            exc,
+        )
+        message = activity_launch_error_message(exc, panel_url=panel_url)
+        if not interaction.response.is_done():
+            await interaction.response.send_message(message, ephemeral=True)
+        else:
+            await interaction.followup.send(message, ephemeral=True)
+        return False
+
+
+async def _respond_to_entry_point(interaction: discord.Interaction) -> None:
+    """Launch the Activity iframe for App Launcher Entry Point (type 4) interactions."""
+    await launch_music_activity(interaction)
+
+
+def install_activity_entry_point(bot: "commands.Bot") -> None:
+    """Handle App Launcher Entry Point interactions before the command tree misroutes them.
+
+    discord.py 2.7 has no ``@tree.interaction_check`` decorator — assigning the coroutine
+    directly is required. We also patch ``CommandTree._call`` because type 4 is not a valid
+    ``AppCommandType`` and the library routes it to the context-menu handler otherwise.
+    """
+
     async def _launch_from_entry_point(interaction: discord.Interaction) -> bool:
         if _entry_point_command_type(interaction) != PRIMARY_ENTRY_POINT:
             return True
-        try:
-            await interaction.response.launch_activity()
-        except discord.HTTPException:
-            log.exception("Activity Entry Point launch failed")
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "Could not launch the music dashboard. Run **`/music`** in this server first.",
-                    ephemeral=True,
-                )
+        await _respond_to_entry_point(interaction)
         return False
+
+    bot.tree.interaction_check = _launch_from_entry_point
+
+    original_call = bot.tree._call
+
+    async def _call_with_entry_point(interaction: discord.Interaction) -> None:
+        if _entry_point_command_type(interaction) == PRIMARY_ENTRY_POINT:
+            await _respond_to_entry_point(interaction)
+            return
+        await original_call(interaction)
+
+    bot.tree._call = _call_with_entry_point
 
 
 async def ensure_activity_entry_point(bot: "commands.Bot") -> None:

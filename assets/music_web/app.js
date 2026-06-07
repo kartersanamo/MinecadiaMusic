@@ -1,17 +1,48 @@
 (function () {
+  const SESSION_ID_KEY = "music_session_id";
+  const TOKEN_KEY = "music_token";
+  const USER_ID_KEY = "music_user_id";
+
+  function looksLikeSessionId(value) {
+    return /^[0-9a-f-]{36}$/i.test(value);
+  }
+
+  function isDiscordActivityHost() {
+    return /\.discordsays\.com$/i.test(window.location.hostname);
+  }
+
   const parts = window.location.pathname.split("/").filter(Boolean);
-  let sessionId = (parts[0] || "").trim();
   const params = new URLSearchParams(window.location.search);
+  let sessionId = (parts[0] || "").trim();
   const urlToken = (params.get("token") || "").trim();
-  let token = urlToken || (sessionStorage.getItem("music_token") || "").trim();
-  if (token) sessionStorage.setItem("music_token", token);
+  let token = urlToken || (sessionStorage.getItem(TOKEN_KEY) || "").trim();
+  if (token) sessionStorage.setItem(TOKEN_KEY, token);
+
+  if (!looksLikeSessionId(sessionId)) {
+    const storedSessionId = (sessionStorage.getItem(SESSION_ID_KEY) || "").trim();
+    if (looksLikeSessionId(storedSessionId)) sessionId = storedSessionId;
+  }
+
+  function persistSessionCredentials() {
+    if (looksLikeSessionId(sessionId)) {
+      sessionStorage.setItem(SESSION_ID_KEY, sessionId);
+    }
+    if (token) sessionStorage.setItem(TOKEN_KEY, token);
+    if (userId) sessionStorage.setItem(USER_ID_KEY, userId);
+  }
+
+  function clearStoredSessionCredentials() {
+    sessionStorage.removeItem(SESSION_ID_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(USER_ID_KEY);
+  }
 
   function getApiBase() {
     return `/api/session/${sessionId}`;
   }
   let ws = null;
   let state = null;
-  let userId = sessionStorage.getItem("music_user_id") || "";
+  let userId = sessionStorage.getItem(USER_ID_KEY) || "";
   let positionBase = 0;
   let positionAt = Date.now();
   let progressTimer = null;
@@ -19,13 +50,8 @@
   let sessionExpired = false;
   let activityBootstrapFailed = false;
 
-  const userParam = params.get("user");
-  if (userParam) {
-    userId = userParam;
-    sessionStorage.setItem("music_user_id", userParam);
-  }
-
   const els = {
+    bootFallback: document.getElementById("bootFallback"),
     gate: document.getElementById("gate"),
     gateTitle: document.getElementById("gateTitle"),
     gateMessage: document.getElementById("gateMessage"),
@@ -61,7 +87,36 @@
     toast: document.getElementById("toast"),
   };
 
+  const userParam = params.get("user");
+  if (userParam) {
+    userId = userParam;
+    sessionStorage.setItem(USER_ID_KEY, userParam);
+  }
+
+  function hideBootFallback() {
+    if (els.bootFallback) {
+      els.bootFallback.style.display = "none";
+    }
+  }
+
+  function paintBootScreen() {
+    document.documentElement.style.background = "#0c0d10";
+    document.body.style.background = "#0c0d10";
+    document.body.style.color = "#f4f5f7";
+    if (els.gate) {
+      els.gate.hidden = false;
+      els.gate.classList.remove("hidden");
+    }
+    if (els.main) {
+      els.main.hidden = true;
+      els.main.classList.add("hidden");
+    }
+  }
+
+  paintBootScreen();
+
   function showGate(title, message) {
+    hideBootFallback();
     if (title) els.gateTitle.textContent = title;
     if (message) els.gateMessage.innerHTML = message;
     els.gate.classList.remove("hidden");
@@ -72,14 +127,14 @@
   }
 
   function showMain() {
+    hideBootFallback();
     els.gate.classList.add("hidden");
     els.gate.hidden = true;
     els.main.classList.remove("hidden");
     els.main.hidden = false;
-  }
-
-  function looksLikeSessionId(value) {
-    return /^[0-9a-f-]{36}$/i.test(value);
+    document.documentElement.style.background = "#0c0d10";
+    document.body.style.background = "#0c0d10";
+    document.body.style.color = "#f4f5f7";
   }
 
   function hasSessionCredentials() {
@@ -88,6 +143,7 @@
 
   function showSessionExpired() {
     sessionExpired = true;
+    clearStoredSessionCredentials();
     if (ws) {
       ws.onclose = null;
       ws.close();
@@ -100,8 +156,29 @@
     els.channelLabel.textContent = "Session expired";
   }
 
-  function isDiscordActivityHost() {
-    return /\.discordsays\.com$/i.test(window.location.hostname);
+  function withTimeout(promise, ms, label) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+      }),
+    ]);
+  }
+
+  async function getDiscordSDK() {
+    if (window.__DiscordSDK) return window.__DiscordSDK;
+    await new Promise((resolve) => {
+      if (window.__DiscordSDK) {
+        resolve();
+        return;
+      }
+      window.addEventListener("discord-sdk-ready", () => resolve(), { once: true });
+      setTimeout(resolve, 3000);
+    });
+    if (window.__DiscordSDK) return window.__DiscordSDK;
+    const mod = await import("/static/discord-embedded-app-sdk.mjs");
+    window.__DiscordSDK = mod.DiscordSDK;
+    return window.__DiscordSDK;
   }
 
   async function tryActivityBootstrap() {
@@ -112,17 +189,21 @@
     if (!clientId) return null;
 
     try {
-      const { DiscordSDK } = await import("/static/discord-embedded-app-sdk.mjs");
+      const DiscordSDK = await getDiscordSDK();
       const discordSdk = new DiscordSDK(clientId);
-      await discordSdk.ready();
+      await withTimeout(discordSdk.ready(), 12000, "Discord SDK");
 
-      const { code } = await discordSdk.commands.authorize({
-        client_id: clientId,
-        response_type: "code",
-        state: "",
-        prompt: "none",
-        scope: ["identify"],
-      });
+      const { code } = await withTimeout(
+        discordSdk.commands.authorize({
+          client_id: clientId,
+          response_type: "code",
+          state: "",
+          prompt: "none",
+          scope: ["identify"],
+        }),
+        12000,
+        "Discord authorize"
+      );
 
       const tokenRes = await fetch("/api/activity/token", {
         method: "POST",
@@ -150,31 +231,71 @@
       return boot;
     } catch (err) {
       console.error("Activity bootstrap failed", err);
-      activityBootstrapFailed = true;
-      showGate(
-        "Activity setup failed",
-        escapeHtml(String(err.message || err)) +
-          "<br><br>Run <strong>/music</strong> in this server first, then launch the Activity again."
-      );
       return null;
     }
   }
 
-  async function bootstrapDashboardSession() {
+  async function refreshActivityCredentials() {
     const activity = await tryActivityBootstrap();
-    if (!activity) return;
+    if (!activity) return false;
     sessionId = activity.sessionId;
     token = activity.token;
     userId = String(activity.userId || userId || "");
-    sessionStorage.setItem("music_token", token);
-    if (userId) sessionStorage.setItem("music_user_id", userId);
+    persistSessionCredentials();
     els.userLabel.textContent = "Signed in via Discord Activity";
     els.userLabel.classList.remove("hidden");
     els.btnLogin.classList.add("hidden");
-    if (window.history?.replaceState) {
-      const qs = userId ? `?user=${encodeURIComponent(userId)}` : "";
-      window.history.replaceState(null, "", `/${sessionId}${qs}`);
+    return true;
+  }
+
+  async function validateStoredSession() {
+    if (!hasSessionCredentials()) return false;
+    try {
+      const res = await fetch(`${getApiBase()}/state`, { headers: headers() });
+      if (!res.ok) return false;
+      const data = await res.json().catch(() => null);
+      if (!data) return false;
+      if (data.panelCreatorId && !userId) {
+        userId = String(data.panelCreatorId);
+        persistSessionCredentials();
+      }
+      return true;
+    } catch (_) {
+      return false;
     }
+  }
+
+  async function bootstrapDashboardSession() {
+    if (!isDiscordActivityHost()) return;
+
+    showGate("Connecting…", "Loading your music dashboard.");
+
+    if (await validateStoredSession()) {
+      void refreshActivityCredentials().catch(() => {});
+      return;
+    }
+
+    clearStoredSessionCredentials();
+    sessionId = "";
+    token = "";
+
+    showGate("Connecting…", "Signing in through Discord…");
+    const activity = await tryActivityBootstrap();
+    if (!activity) {
+      activityBootstrapFailed = true;
+      showGate(
+        "Activity setup failed",
+        "Could not connect to Discord. Run <strong>/music</strong> in this server, then launch the Activity again."
+      );
+      return;
+    }
+    sessionId = activity.sessionId;
+    token = activity.token;
+    userId = String(activity.userId || userId || "");
+    persistSessionCredentials();
+    els.userLabel.textContent = "Signed in via Discord Activity";
+    els.userLabel.classList.remove("hidden");
+    els.btnLogin.classList.add("hidden");
   }
 
   function setSignedInLabel() {
@@ -455,7 +576,7 @@
       const data = await api("/state");
       if (data.panelCreatorId && !userId) {
         userId = String(data.panelCreatorId);
-        sessionStorage.setItem("music_user_id", userId);
+        sessionStorage.setItem(USER_ID_KEY, userId);
         setSignedInLabel();
       }
       applyState(data);
@@ -686,6 +807,11 @@
 
   startDashboard().catch((err) => {
     console.error(err);
-    showGate("Unable to load", "Something went wrong loading the dashboard.");
+    hideBootFallback();
+    showGate(
+      "Unable to load",
+      escapeHtml(String(err.message || err)) +
+        "<br><br>Leave the Activity and launch it again from the <strong>/music</strong> panel."
+    );
   });
 })();

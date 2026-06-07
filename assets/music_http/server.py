@@ -119,13 +119,39 @@ async def start_music_http(bot: "commands.Bot") -> None:
         if not index.is_file():
             raise web.HTTPNotFound()
         version = _asset_version()
+        css_path = _WEB_DIR / "styles.css"
+        js_path = _WEB_DIR / "app.js"
         html = index.read_text(encoding="utf-8")
+        css = css_path.read_text(encoding="utf-8") if css_path.is_file() else ""
+        js = js_path.read_text(encoding="utf-8") if js_path.is_file() else ""
+        js = js.replace("</script>", "<\\/script>")
         html = html.replace("__ASSET_VERSION__", version)
         html = html.replace("__DISCORD_CLIENT_ID__", _discord_client_id())
+        html = html.replace(
+            "__INLINE_STYLES__",
+            f'<style id="inlined-styles">{css}</style>',
+        )
+        html = html.replace(
+            "__BOOT_SCRIPTS__",
+            (
+                '<script type="module">\n'
+                f'import {{ DiscordSDK }} from "/static/discord-embedded-app-sdk.mjs?v={version}";\n'
+                "window.__DiscordSDK = DiscordSDK;\n"
+                "window.dispatchEvent(new Event('discord-sdk-ready'));\n"
+                "</script>\n"
+                f'<script id="jsScript">\n{js}\n</script>'
+            ),
+        )
         return web.Response(
             text=html,
             content_type="text/html",
-            headers={"Cache-Control": "no-store"},
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "CDN-Cache-Control": "no-store",
+                "Surrogate-Control": "no-store",
+                "X-Accel-Expires": "0",
+            },
         )
 
     async def api_state(request: web.Request) -> web.Response:

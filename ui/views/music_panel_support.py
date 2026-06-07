@@ -124,8 +124,7 @@ def build_panel_markdown(state: MusicPanelState) -> tuple[str, str, str, str, st
     activity_md = "\n".join(activity_lines)
 
     dashboard_md = (
-        f"[Open full panel in browser]({state.panel_url})\n\n"
-        "*In voice? Use **Launch Dashboard** below to control music inside Discord.*"
+        f"[Open full panel in browser]({state.panel_url})\n"
     )
 
     return title_md, status_md, queue_md, activity_md, dashboard_md, artwork_url

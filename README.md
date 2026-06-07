@@ -14,7 +14,7 @@ Discord bot for music playback on Minecadia: `/music` panel, Lavalink, and the w
 Required once per application (`DISCORD_CLIENT_ID` in `.env`):
 
 1. Open [Discord Developer Portal](https://discord.com/developers/applications) → your Minecadia Music app.
-2. **Activities → Settings**: enable **Activities**.
+2. **Activities → Settings**: enable **Activities**, then under **Supported Platforms** check **Web**, **iOS**, and **Android** (mobile is off by default — without iOS/Android, Launch Dashboard fails on phones with error 50231).
 3. **Activities → URL Mappings**: add mapping prefix `/` → target `music.kartersanamo.com` (host only, no `https://`).
 4. **OAuth2**: keep redirect `https://music.kartersanamo.com/oauth/callback` (used by dashboard OAuth and Activities).
 5. **Installation**: ensure **Guild Install** is enabled.

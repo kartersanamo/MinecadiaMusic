@@ -23,6 +23,7 @@ from ui.views.music_panel_support import (
     resolve_panel_state,
     _accent_int,
 )
+from core.activity_entry_point import launch_music_activity
 from ui.views.music_search_view import MusicSearchView, search_results_embed
 
 log = logging.getLogger("Music")
@@ -314,7 +315,7 @@ class _MPLaunchActivityButton(discord.ui.Button):
         state = await resolve_panel_state(interaction, self._bot)
         if not state or not await check_panel_owner(interaction, state.owner_id):
             return
-        await interaction.response.launch_activity()
+        await launch_music_activity(interaction, panel_url=state.panel_url)
 
 
 class _MPRemoveSelect(discord.ui.Select):

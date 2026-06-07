@@ -248,13 +248,6 @@ class GuildMusicSession:
 
     async def _on_voice_connected(self, channel: discord.VoiceChannel) -> None:
         try:
-            await self.manager.bot.http.edit_voice_channel_status(
-                "🎵 Open **Launch Dashboard** on the /music panel",
-                channel_id=channel.id,
-            )
-        except Exception:
-            log.debug("Failed to set voice channel status", exc_info=True)
-        try:
             from ui.views.music_panel_support import refresh_bound_panel
 
             await refresh_bound_panel(self, self.manager.bot)
@@ -280,14 +273,21 @@ class GuildMusicSession:
         else:
             player.queue.mode = QueueMode.normal
 
-    async def _play_next_queued(self, player: wavelink.Player) -> None:
-        if player.queue.is_empty:
-            return
-        try:
-            track = player.queue.get()
-        except QueueEmpty:
-            return
-        await player.play(track, replace=True)
+    async def skip(self, *, actor_id: int | None = None) -> str:
+        player = self.get_player()
+        if not player:
+            raise UserFacingError("Not connected to voice.")
+        skipped = await player.skip(force=True)
+        if actor_id:
+            if skipped:
+                self.log_activity(actor_id, f"skipped **{skipped.title}**")
+            else:
+                self.log_activity(actor_id, "skipped the current track")
+        # Partial autoplay advances the queue on TrackEndEvent — playing again here races
+        # autoplay, skips an extra queue item, and leaves player.current out of sync with audio.
+        if skipped:
+            return f"Skipped **{skipped.title}**."
+        return "Skipped."
 
     def state_dict(self) -> dict[str, Any]:
         player = self.get_player()
@@ -432,22 +432,6 @@ class GuildMusicSession:
             self.log_activity(actor_id, "resumed playback")
         await self.notify()
         return "Resumed playback."
-
-    async def skip(self, *, actor_id: int | None = None) -> str:
-        player = self.get_player()
-        if not player:
-            raise UserFacingError("Not connected to voice.")
-        skipped = await player.skip(force=True)
-        await self._play_next_queued(player)
-        if actor_id:
-            if skipped:
-                self.log_activity(actor_id, f"skipped **{skipped.title}**")
-            else:
-                self.log_activity(actor_id, "skipped the current track")
-        await self.notify()
-        if skipped:
-            return f"Skipped **{skipped.title}**."
-        return "Skipped."
 
     async def stop(self, *, actor_id: int | None = None) -> str:
         player = self.get_player()

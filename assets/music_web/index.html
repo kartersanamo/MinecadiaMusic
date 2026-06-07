@@ -7,33 +7,13 @@
   <meta name="color-scheme" content="dark" />
   <meta name="discord-client-id" content="__DISCORD_CLIENT_ID__" />
   <title>Minecadia Music</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=__ASSET_VERSION__" id="cssLink" />
-  <style>
-    /* Critical layout — works even if the external stylesheet is blocked or slow */
-    .hidden { display: none !important; }
-    [hidden] { display: none !important; }
-    html { color-scheme: dark; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      background: #0c0d10;
-      color: #f4f5f7;
-      font-family: system-ui, -apple-system, sans-serif;
-    }
-    .shell { max-width: 1180px; margin: 0 auto; padding: 1.25rem 1rem 2.5rem; }
-    input, button { font: inherit; }
-    input[type="range"], input[type="search"] {
-      background: rgba(255, 255, 255, 0.06);
-      color: inherit;
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      border-radius: 8px;
-    }
-  </style>
+  __INLINE_STYLES__
 </head>
-<body>
+<body style="margin:0;min-height:100vh;background:#0c0d10;color:#f4f5f7;">
+  <div id="bootFallback" style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:#0c0d10;color:#f4f5f7;font:600 18px system-ui,sans-serif;padding:24px;text-align:center;">
+    Loading Minecadia Music…
+  </div>
+
   <div class="ambient" id="ambient" aria-hidden="true"></div>
 
   <div class="shell">
@@ -57,10 +37,10 @@
       </div>
     </header>
 
-    <div id="gate" class="gate hidden" hidden>
+    <div id="gate" class="gate">
       <div class="gate-card">
-        <h2 id="gateTitle">Session required</h2>
-        <p id="gateMessage">Open this page from the <strong>/music</strong> panel in Discord to get your private link.</p>
+        <h2 id="gateTitle">Connecting…</h2>
+        <p id="gateMessage">Loading your music dashboard.</p>
       </div>
     </div>
 
@@ -169,6 +149,6 @@
   </div>
 
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-  <script type="module" src="/static/app.js?v=__ASSET_VERSION__" id="jsScript"></script>
+  __BOOT_SCRIPTS__
 </body>
 </html>
