@@ -47,44 +47,14 @@ class Client(commands.Bot):
 
     @task("Sync Command Tree")
     async def sync_command_tree(self) -> list[discord.app_commands.AppCommand]:
-        guild_id = os.getenv("DISCORD_GUILD_ID", "").strip()
-        if guild_id.isdigit() and self.application_id:
-            gid = int(guild_id)
-            guild = discord.Object(id=gid)
-            self.tree.clear_commands(guild=guild)
-            self.tree.copy_global_to(guild=guild)
-            synced = await self.tree.sync(guild=guild)
-            log_tasks.info(
-                "Guild-synced %s commands to guild %s",
-                len(synced),
-                guild_id,
-            )
-            try:
-                self.tree.clear_commands(guild=None)
-                await self.tree.sync()
-            except discord.HTTPException as exc:
-                if exc.code == 50240:
-                    log_tasks.warning(
-                        "Skipped global command wipe — Discord Activities Entry Point "
-                        "cannot be removed via bulk sync (50240)."
-                    )
-                else:
-                    raise
-            return synced
-        try:
-            synced = await self.tree.sync()
-        except discord.HTTPException as exc:
-            if exc.code == 50240:
-                log_tasks.warning(
-                    "Global command sync incomplete — Activities Entry Point "
-                    "must stay registered (50240)."
-                )
-                synced = []
-            else:
-                raise
-        command_list = ", ".join(c.name for c in synced)
-        log_tasks.info("Globally synced %s commands: %s", len(synced), command_list)
-        return synced
+        from core.guild_command_sync import sync_guild_commands
+
+        return await sync_guild_commands(
+            self,
+            log=log_tasks,
+            also_sync_global=False,
+            clear_global_after_guild=True,
+        )
 
     @task("Setup Lavalink")
     async def setup_lavalink(self):
