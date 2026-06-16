@@ -745,6 +745,7 @@ class MusicSessionManager:
             log_action(
                 log,
                 "manager.invalid_token",
+                level=logging.DEBUG,
                 session_id=session_id[:8] if session_id else None,
                 found=bool(session),
             )

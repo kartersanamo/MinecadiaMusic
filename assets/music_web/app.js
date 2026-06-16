@@ -309,8 +309,8 @@
 
     showGate("Connecting…", "Loading your music dashboard.");
 
-    if (await validateStoredSession()) {
-      void refreshActivityCredentials().catch(() => {});
+    if await validateStoredSession()) {
+      await refreshActivityCredentials().catch(() => {});
       return;
     }
 
@@ -630,6 +630,13 @@
     }
   }
 
+  async function recoverSessionCredentials() {
+    if (isDiscordActivityHost()) {
+      return refreshActivityCredentials();
+    }
+    return validateStoredSession();
+  }
+
   function connectWs() {
     if (sessionExpired) return;
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -642,9 +649,14 @@
         applyState(JSON.parse(ev.data));
       } catch (_) {}
     };
-    ws.onclose = () => {
+    ws.onclose = async () => {
       setLive(false);
-      if (!sessionExpired) setTimeout(connectWs, 3000);
+      if (sessionExpired) return;
+      if (await recoverSessionCredentials()) {
+        setTimeout(connectWs, 1500);
+        return;
+      }
+      showSessionExpired();
     };
   }
 

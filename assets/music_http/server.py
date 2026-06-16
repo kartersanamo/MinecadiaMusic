@@ -70,6 +70,28 @@ async def request_logging_middleware(request: web.Request, handler):
         )
     try:
         response = await handler(request)
+    except web.HTTPException as exc:
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+        if exc.status >= 500:
+            log_http.exception(
+                "http.error method=%s path=%s status=%s elapsed_ms=%s",
+                request.method,
+                path,
+                exc.status,
+                elapsed_ms,
+            )
+        elif not skip:
+            log_action(
+                log_http,
+                "http.response",
+                level=logging.DEBUG,
+                method=request.method,
+                path=path,
+                status=exc.status,
+                elapsed_ms=elapsed_ms,
+                session_id=session_id[:8] if session_id else None,
+            )
+        raise
     except Exception:
         elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
         log_http.exception(

@@ -33,7 +33,13 @@ def session_from_request(
         raise web.HTTPUnauthorized(text='{"error":"Missing token"}', content_type="application/json")
     session = manager.validate_token(session_id, token)
     if not session:
-        log_action(log_http, "auth.session_rejected", session_id=session_id[:8])
+        log_action(
+            log_http,
+            "auth.session_rejected",
+            level=logging.DEBUG,
+            session_id=session_id[:8],
+            found=bool(manager.get_by_session_id(session_id)),
+        )
         raise web.HTTPUnauthorized(text='{"error":"Invalid or expired session"}', content_type="application/json")
     log_action(
         log_http,
