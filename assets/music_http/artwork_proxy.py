@@ -14,6 +14,7 @@ log = logging.getLogger("music_http")
 # Hostnames Lavalink / YouTube / SoundCloud commonly use for artwork.
 _ALLOWED_HOST_SUFFIXES = (
     "ytimg.com",
+    "youtube.com",
     "googleusercontent.com",
     "ggpht.com",
     "sndcdn.com",
@@ -39,12 +40,15 @@ def _host_allowed(hostname: str) -> bool:
 
 
 def validate_artwork_url(raw: str) -> str:
-    parsed = urlparse(raw.strip())
+    cleaned = raw.strip()
+    if cleaned.startswith("//"):
+        cleaned = f"https:{cleaned}"
+    parsed = urlparse(cleaned)
     if parsed.scheme not in ("http", "https"):
         raise web.HTTPBadRequest(text="Invalid artwork URL scheme")
     if not parsed.hostname or not _host_allowed(parsed.hostname):
         raise web.HTTPBadRequest(text="Artwork host not allowed")
-    return raw.strip()
+    return cleaned
 
 
 def _cache_key(url: str) -> str:

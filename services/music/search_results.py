@@ -54,6 +54,17 @@ def markdown_link(
     return f"**{label}**" if bold else label
 
 
+def fallback_artwork(uri: str | None, identifier: str | None = None) -> str | None:
+    """YouTube thumbnail when Lavalink does not populate artwork on search hits."""
+    for candidate in (uri, identifier):
+        if not candidate:
+            continue
+        video_id = _youtube_video_id(str(candidate))
+        if video_id:
+            return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+    return None
+
+
 def _video_only_identifier(track: wavelink.Playable) -> str:
     if track.uri:
         video_id = _youtube_video_id(track.uri)
@@ -125,13 +136,14 @@ def _format_ms(ms: int) -> str:
 
 def playable_preview(track: wavelink.Playable) -> SearchResultTrack:
     ident = _video_only_identifier(track)
+    artwork = track.artwork or fallback_artwork(track.uri, ident)
     return SearchResultTrack(
         title=track.title or "Unknown",
         author=track.author or "Unknown",
         uri=track.uri,
         identifier=ident,
         duration_ms=track.length or 0,
-        artwork=track.artwork,
+        artwork=artwork,
     )
 
 
@@ -149,7 +161,9 @@ def playlist_result(
         author=author,
         uri=playlist.url or identifier,
         identifier=identifier,
-        artwork=playlist.artwork or (previews[0].artwork if previews else None),
+        artwork=playlist.artwork
+        or (previews[0].artwork if previews else None)
+        or fallback_artwork(playlist.url, identifier),
         duration_ms=0,
         track_count=len(previews),
         tracks=previews,

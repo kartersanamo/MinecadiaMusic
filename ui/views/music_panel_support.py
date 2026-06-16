@@ -11,6 +11,7 @@ from discord.ext import commands
 from core.action_log import log_action
 from core.config import ConfigManager
 from core.loggers import log_ui
+from services.music.search_results import markdown_link
 
 if TYPE_CHECKING:
     from services.music.session_manager import GuildMusicSession

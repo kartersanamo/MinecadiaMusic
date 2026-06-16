@@ -20,9 +20,34 @@
     return raw;
   }
 
+  function resolveArtwork(raw, item) {
+    if (raw) return raw;
+    if (!item) return "";
+    const url = externalUrl(item);
+    if (!url) return "";
+    const match = url.match(YT_VIDEO_ID_RE);
+    return match ? `https://i.ytimg.com/vi/${match[1]}/hqdefault.jpg` : "";
+  }
+
   function cssBackgroundUrl(raw) {
     const url = artworkUrl(raw);
     return url ? `url("${url.replace(/"/g, "%22")}")` : "";
+  }
+
+  const ART_FALLBACK_SVG =
+    '<svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 14.17V7h6V3h-8z" fill="currentColor"/></svg>';
+
+  function thumbImgHtml(item, className) {
+    const src = artworkUrl(resolveArtwork(item?.artwork, item));
+    if (!src) {
+      return `<div class="${className}">${ART_FALLBACK_SVG}</div>`;
+    }
+    return (
+      `<div class="${className} has-thumb">` +
+      `<img src="${escapeHtml(src)}" alt="" loading="lazy" ` +
+      `onerror="this.remove();this.parentElement.classList.remove('has-thumb');" />` +
+      `${ART_FALLBACK_SVG}</div>`
+    );
   }
 
   const parts = window.location.pathname.split("/").filter(Boolean);
@@ -506,17 +531,18 @@
       els.npAuthor.textContent = "Search below to start listening";
     }
 
-    const artUrl = artworkUrl(cur?.artwork || "");
+    const resolvedArt = resolveArtwork(cur?.artwork, cur);
+    const artUrl = artworkUrl(resolvedArt);
     const trackUrl = externalUrl(cur);
     els.npArt.classList.toggle("has-art", !!artUrl);
     els.npArt.classList.toggle("is-clickable", !!trackUrl);
-    els.npArt.style.backgroundImage = artUrl ? cssBackgroundUrl(cur?.artwork) : "";
+    els.npArt.style.backgroundImage = artUrl ? cssBackgroundUrl(resolvedArt) : "";
     els.npArt.onclick = trackUrl
       ? () => window.open(trackUrl, "_blank", "noopener,noreferrer")
       : null;
     els.npArt.title = trackUrl ? "Open source" : "";
     els.heroBackdrop.hidden = !artUrl;
-    els.heroBackdrop.style.backgroundImage = artUrl ? cssBackgroundUrl(cur?.artwork) : "";
+    els.heroBackdrop.style.backgroundImage = artUrl ? cssBackgroundUrl(resolvedArt) : "";
     if (artUrl) {
       els.ambient.style.background = `
         radial-gradient(ellipse 70% 50% at 30% 0%, rgba(241, 196, 15, 0.14), transparent 55%),
@@ -542,13 +568,12 @@
     els.queueList.innerHTML = "";
     queue.forEach((t, i) => {
       const li = document.createElement("li");
-      li.className = "queue-item" + (t.artwork ? " has-art" : "");
+      li.className = "queue-item" + (resolveArtwork(t.artwork, t) ? " has-art" : "");
       const req = t.requesterName ? ` · ${escapeHtml(t.requesterName)}` : "";
       const dur = t.durationText ? ` · ${escapeHtml(t.durationText)}` : "";
-      const queueArtStyle = t.artwork ? `background-image:${cssBackgroundUrl(t.artwork)}` : "";
       li.innerHTML = `
         <span class="queue-index">${i + 1}</span>
-        <div class="queue-art" style="${queueArtStyle}"></div>
+        ${thumbImgHtml(t, "queue-art")}
         <div class="queue-info">
           <p class="queue-title">${linkHtml(t.title, t, { className: "track-link" })}</p>
           <p class="queue-sub">${escapeHtml(t.author || "Unknown")}${dur}${req}</p>
@@ -681,7 +706,6 @@
       const card = document.createElement("li");
       card.className = "result-card" + (isPlaylist ? " is-playlist" : "");
 
-      const artStyle = t.artwork ? `background-image:${cssBackgroundUrl(t.artwork)}` : "";
       const meta = isPlaylist
         ? `${escapeHtml(t.author || "Unknown")} · ${t.trackCount} tracks`
         : `${escapeHtml(t.author || "Unknown")}${t.durationText ? ` · ${escapeHtml(t.durationText)}` : ""}`;
@@ -701,9 +725,7 @@
 
       const openLink = externalUrl(t);
       card.innerHTML = `
-        <div class="result-art" style="${artStyle}">
-          ${t.artwork ? "" : '<svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 14.17V7h6V3h-8z" fill="currentColor"/></svg>'}
-        </div>
+        ${thumbImgHtml(t, "result-art")}
         <div class="result-body">
           <p class="result-title">${linkHtml(t.title, t, { className: "track-link" })}</p>
           <p class="result-meta">${meta}${openLink ? ' · <a class="track-link" href="' + escapeHtml(openLink) + '" target="_blank" rel="noopener noreferrer">Open</a>' : ""}</p>

@@ -295,7 +295,7 @@ async def start_music_http(bot: "commands.Bot") -> None:
                 "api.control",
                 guild_id=session.guild_id,
                 user_id=uid,
-                action=action,
+                control=action,
             )
             msg = ""
             if action == "pause":

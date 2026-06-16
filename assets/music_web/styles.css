@@ -646,9 +646,24 @@ body {
   place-items: center;
   color: var(--muted);
   flex-shrink: 0;
+  overflow: hidden;
 }
 
 .result-art svg { width: 22px; height: 22px; opacity: 0.4; }
+
+.result-art.has-thumb svg,
+.queue-art.has-thumb svg {
+  display: none;
+}
+
+.result-art img,
+.queue-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+  display: block;
+}
 
 .result-art.is-clickable { cursor: pointer; }
 .result-art.is-clickable:hover { opacity: 0.85; }
@@ -762,7 +777,13 @@ body {
   background-position: center;
   grid-column: 1;
   grid-row: 1;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  color: var(--muted);
 }
+
+.queue-art svg { width: 18px; height: 18px; opacity: 0.35; }
 
 .queue-item.has-art .queue-index { display: none; }
 .queue-item:not(.has-art) .queue-art { display: none; }
