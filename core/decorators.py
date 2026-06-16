@@ -10,7 +10,6 @@ def task(action_name: str, log: bool = None):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
             start_time = time.perf_counter()
-            log_tasks.info("%s started", action_name)
             try:
                 result = await func(*args, **kwargs)
                 time_elapsed = round((time.perf_counter() - start_time), 2)
@@ -20,7 +19,7 @@ def task(action_name: str, log: bool = None):
                         action_name,
                         time_elapsed,
                     )
-                else:
+                elif log:
                     log_tasks.info("%s finished in %ss", action_name, time_elapsed)
                 return result
             except Exception as error:

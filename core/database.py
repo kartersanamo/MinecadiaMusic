@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 
 import aiomysql
@@ -41,7 +42,7 @@ class DatabasePool:
                 else:
                     await cursor.execute(query)
                 rows = await cursor.fetchall()
-            log_action(log_database, "db.execute.ok", rows=len(rows))
+            log_action(log_database, "db.execute.ok", level=logging.DEBUG, rows=len(rows))
         except Exception as error:
             from core.errors.db import log_query_failure
 

@@ -5,3 +5,7 @@
 logs/
 lavalink/Lavalink.jar
 lavalink/application.yml
+
+# Auto-generated diagrams (regenerate: python3 ../scripts/generate_bot_diagrams.py MinecadiaMusic)
+docs/diagrams/*
+!docs/diagrams/.gitkeep

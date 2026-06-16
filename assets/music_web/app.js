@@ -11,6 +11,20 @@
     return /\.discordsays\.com$/i.test(window.location.hostname);
   }
 
+  /** Discord Activity CSP blocks external image hosts — load via same-origin proxy. */
+  function artworkUrl(raw) {
+    if (!raw) return "";
+    if (isDiscordActivityHost()) {
+      return `/api/artwork?url=${encodeURIComponent(raw)}`;
+    }
+    return raw;
+  }
+
+  function cssBackgroundUrl(raw) {
+    const url = artworkUrl(raw);
+    return url ? `url("${url.replace(/"/g, "%22")}")` : "";
+  }
+
   const parts = window.location.pathname.split("/").filter(Boolean);
   const params = new URLSearchParams(window.location.search);
   let sessionId = (parts[0] || "").trim();
@@ -492,17 +506,17 @@
       els.npAuthor.textContent = "Search below to start listening";
     }
 
-    const artUrl = cur?.artwork || "";
+    const artUrl = artworkUrl(cur?.artwork || "");
     const trackUrl = externalUrl(cur);
     els.npArt.classList.toggle("has-art", !!artUrl);
     els.npArt.classList.toggle("is-clickable", !!trackUrl);
-    els.npArt.style.backgroundImage = artUrl ? `url(${artUrl})` : "";
+    els.npArt.style.backgroundImage = artUrl ? cssBackgroundUrl(cur?.artwork) : "";
     els.npArt.onclick = trackUrl
       ? () => window.open(trackUrl, "_blank", "noopener,noreferrer")
       : null;
     els.npArt.title = trackUrl ? "Open source" : "";
     els.heroBackdrop.hidden = !artUrl;
-    els.heroBackdrop.style.backgroundImage = artUrl ? `url(${artUrl})` : "";
+    els.heroBackdrop.style.backgroundImage = artUrl ? cssBackgroundUrl(cur?.artwork) : "";
     if (artUrl) {
       els.ambient.style.background = `
         radial-gradient(ellipse 70% 50% at 30% 0%, rgba(241, 196, 15, 0.14), transparent 55%),
@@ -531,9 +545,10 @@
       li.className = "queue-item" + (t.artwork ? " has-art" : "");
       const req = t.requesterName ? ` · ${escapeHtml(t.requesterName)}` : "";
       const dur = t.durationText ? ` · ${escapeHtml(t.durationText)}` : "";
+      const queueArtStyle = t.artwork ? `background-image:${cssBackgroundUrl(t.artwork)}` : "";
       li.innerHTML = `
         <span class="queue-index">${i + 1}</span>
-        <div class="queue-art" style="${t.artwork ? `background-image:url(${escapeHtml(t.artwork)})` : ""}"></div>
+        <div class="queue-art" style="${queueArtStyle}"></div>
         <div class="queue-info">
           <p class="queue-title">${linkHtml(t.title, t, { className: "track-link" })}</p>
           <p class="queue-sub">${escapeHtml(t.author || "Unknown")}${dur}${req}</p>
@@ -666,7 +681,7 @@
       const card = document.createElement("li");
       card.className = "result-card" + (isPlaylist ? " is-playlist" : "");
 
-      const artStyle = t.artwork ? `background-image:url(${escapeHtml(t.artwork)})` : "";
+      const artStyle = t.artwork ? `background-image:${cssBackgroundUrl(t.artwork)}` : "";
       const meta = isPlaylist
         ? `${escapeHtml(t.author || "Unknown")} · ${t.trackCount} tracks`
         : `${escapeHtml(t.author || "Unknown")}${t.durationText ? ` · ${escapeHtml(t.durationText)}` : ""}`;

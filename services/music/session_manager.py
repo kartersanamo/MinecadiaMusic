@@ -626,6 +626,7 @@ class GuildMusicSession:
             log_action(
                 log,
                 "session.idle_wait",
+                level=logging.DEBUG,
                 guild_id=self.guild_id,
                 session_id=self.session_id[:8],
                 seconds=idle,
@@ -761,6 +762,7 @@ class MusicSessionManager:
                 log_action(
                     log,
                     "lavalink.track_start",
+                    level=logging.DEBUG,
                     guild_id=player.guild.id,
                     session_id=session.session_id[:8],
                     track=payload.track.title,
@@ -778,6 +780,7 @@ class MusicSessionManager:
                 log_action(
                     log,
                     "lavalink.track_end",
+                    level=logging.DEBUG,
                     guild_id=player.guild.id,
                     session_id=session.session_id[:8],
                     track=getattr(payload.track, "title", None),

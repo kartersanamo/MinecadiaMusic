@@ -154,6 +154,7 @@ def log_music_method(action: str | None = None) -> Callable[[F], F]:
             log_action(
                 log_music,
                 f"session.{name}.start",
+                level=logging.DEBUG,
                 guild_id=self.guild_id,
                 session_id=self.session_id[:8],
                 **details,
@@ -184,6 +185,7 @@ def log_music_method(action: str | None = None) -> Callable[[F], F]:
             log_action(
                 log_music,
                 f"session.{name}.ok",
+                level=logging.DEBUG,
                 guild_id=self.guild_id,
                 session_id=self.session_id[:8],
                 result=_summarize_music_result(result),

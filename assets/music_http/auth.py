@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Optional, Tuple
 from urllib.parse import urlencode
@@ -37,6 +38,7 @@ def session_from_request(
     log_action(
         log_http,
         "auth.session_ok",
+        level=logging.DEBUG,
         session_id=session_id[:8],
         guild_id=session.guild_id,
     )

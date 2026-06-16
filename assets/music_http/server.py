@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from aiohttp import web
 
 
+from assets.music_http.artwork_proxy import artwork_handler
 from assets.music_http.auth import (
     activity_bootstrap_for_user,
     discord_fetch_user,
@@ -55,14 +56,18 @@ _FRAME_ANCESTORS = (
 async def request_logging_middleware(request: web.Request, handler):
     started = time.perf_counter()
     session_id = request.match_info.get("session_id")
-    log_action(
-        log_http,
-        "http.request",
-        method=request.method,
-        path=request.path,
-        session_id=session_id[:8] if session_id else None,
-        remote=request.remote,
-    )
+    path = request.path
+    skip = path in ("/health",) or path.endswith("/state")
+    if not skip:
+        log_action(
+            log_http,
+            "http.request",
+            level=logging.DEBUG,
+            method=request.method,
+            path=path,
+            session_id=session_id[:8] if session_id else None,
+            remote=request.remote,
+        )
     try:
         response = await handler(request)
     except Exception:
@@ -70,21 +75,23 @@ async def request_logging_middleware(request: web.Request, handler):
         log_http.exception(
             "http.error method=%s path=%s elapsed_ms=%s",
             request.method,
-            request.path,
+            path,
             elapsed_ms,
         )
         raise
-    elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
-    status = response.status if isinstance(response, web.Response) else 200
-    log_action(
-        log_http,
-        "http.response",
-        method=request.method,
-        path=request.path,
-        status=status,
-        elapsed_ms=elapsed_ms,
-        session_id=session_id[:8] if session_id else None,
-    )
+    if not skip:
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+        status = response.status if isinstance(response, web.Response) else 200
+        log_action(
+            log_http,
+            "http.response",
+            level=logging.DEBUG,
+            method=request.method,
+            path=path,
+            status=status,
+            elapsed_ms=elapsed_ms,
+            session_id=session_id[:8] if session_id else None,
+        )
     return response
 
 
@@ -391,6 +398,7 @@ async def start_music_http(bot: "commands.Bot") -> None:
         log_action(
             log_http,
             "ws.connect",
+            level=logging.DEBUG,
             guild_id=session.guild_id,
             session_id=session.session_id[:8],
         )
@@ -417,12 +425,14 @@ async def start_music_http(bot: "commands.Bot") -> None:
             log_action(
                 log_http,
                 "ws.disconnect",
+                level=logging.DEBUG,
                 guild_id=session.guild_id,
                 session_id=session.session_id[:8],
             )
         return ws
 
     app.router.add_get("/health", health)
+    app.router.add_get("/api/artwork", artwork_handler)
     app.router.add_get("/oauth/callback", oauth_callback)
     app.router.add_post("/api/activity/token", api_activity_token)
     app.router.add_get("/api/activity/bootstrap", api_activity_bootstrap)
