@@ -8,8 +8,9 @@ from typing import TYPE_CHECKING, Any
 import discord
 from discord.ext import commands
 
+from core.action_log import log_action
 from core.config import ConfigManager
-from services.music.search_results import markdown_link
+from core.loggers import log_ui
 
 if TYPE_CHECKING:
     from services.music.session_manager import GuildMusicSession
@@ -133,6 +134,13 @@ def build_panel_markdown(state: MusicPanelState) -> tuple[str, str, str, str, st
 async def check_panel_owner(interaction: discord.Interaction, owner_id: int) -> bool:
     if interaction.user.id == owner_id:
         return True
+    log_action(
+        log_ui,
+        "panel.owner_denied",
+        user_id=interaction.user.id,
+        owner_id=owner_id,
+        guild_id=interaction.guild.id if interaction.guild else None,
+    )
     await interaction.response.send_message(
         "This panel belongs to someone else. Run **`/music`** for your own.",
         ephemeral=True,

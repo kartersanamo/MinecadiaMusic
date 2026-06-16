@@ -3,6 +3,8 @@ from pathlib import Path
 
 os.chdir(Path(__file__).resolve().parent)
 
+import logger  # noqa: F401 — initialize logging before other imports
+
 from discord.ext import commands
 from discord import app_commands
 import discord

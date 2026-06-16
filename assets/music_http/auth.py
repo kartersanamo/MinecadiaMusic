@@ -7,6 +7,8 @@ from urllib.parse import urlencode
 import aiohttp
 from aiohttp import web
 
+from core.action_log import log_action
+from core.loggers import log_http
 from core.errors.exceptions import UserFacingError
 from services.music.session_manager import GuildMusicSession, MusicSessionManager
 
@@ -30,7 +32,14 @@ def session_from_request(
         raise web.HTTPUnauthorized(text='{"error":"Missing token"}', content_type="application/json")
     session = manager.validate_token(session_id, token)
     if not session:
+        log_action(log_http, "auth.session_rejected", session_id=session_id[:8])
         raise web.HTTPUnauthorized(text='{"error":"Invalid or expired session"}', content_type="application/json")
+    log_action(
+        log_http,
+        "auth.session_ok",
+        session_id=session_id[:8],
+        guild_id=session.guild_id,
+    )
     return session, token
 
 
@@ -116,6 +125,13 @@ async def activity_bootstrap_for_user(
         raise UserFacingError("No music panel for this server. Run **`/music`** first.")
     manager.check_member_web(session, user_id, need_queue=True)
     session.oauth_users[user_id] = time.time()
+    log_action(
+        log_http,
+        "auth.activity_bootstrap",
+        guild_id=guild_id,
+        user_id=user_id,
+        session_id=session.session_id[:8],
+    )
     return {
         "sessionId": session.session_id,
         "token": session.session_token,

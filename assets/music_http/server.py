@@ -18,7 +18,9 @@ from assets.music_http.auth import (
     oauth_authorize_url,
     session_from_request,
 )
+from core.action_log import log_action
 from core.errors.exceptions import UserFacingError
+from core.loggers import log_http
 from services.music.queue import LoopMode
 from services.music.resolver import search_media
 
@@ -47,6 +49,43 @@ _FRAME_ANCESTORS = (
     "frame-ancestors https://*.discord.com https://discord.com "
     "https://*.discordsays.com;"
 )
+
+
+@web.middleware
+async def request_logging_middleware(request: web.Request, handler):
+    started = time.perf_counter()
+    session_id = request.match_info.get("session_id")
+    log_action(
+        log_http,
+        "http.request",
+        method=request.method,
+        path=request.path,
+        session_id=session_id[:8] if session_id else None,
+        remote=request.remote,
+    )
+    try:
+        response = await handler(request)
+    except Exception:
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+        log_http.exception(
+            "http.error method=%s path=%s elapsed_ms=%s",
+            request.method,
+            request.path,
+            elapsed_ms,
+        )
+        raise
+    elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+    status = response.status if isinstance(response, web.Response) else 200
+    log_action(
+        log_http,
+        "http.response",
+        method=request.method,
+        path=request.path,
+        status=status,
+        elapsed_ms=elapsed_ms,
+        session_id=session_id[:8] if session_id else None,
+    )
+    return response
 
 
 @web.middleware
@@ -90,7 +129,7 @@ def _parse_user_id(body: dict, session) -> int:
 async def start_music_http(bot: "commands.Bot") -> None:
     global _server
     manager = bot.app.music
-    app = web.Application(middlewares=[security_headers_middleware])
+    app = web.Application(middlewares=[request_logging_middleware, security_headers_middleware])
 
     async def health(_request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "lavalink": manager._lavalink_ready})
@@ -190,6 +229,15 @@ async def start_music_http(bot: "commands.Bot") -> None:
             identifier = body.get("identifier")
             kind = str(body.get("kind", "track")).lower()
             playlist_title = body.get("playlistTitle") or body.get("playlist_title")
+            log_action(
+                log_http,
+                "api.queue_add",
+                guild_id=session.guild_id,
+                user_id=uid,
+                kind=kind,
+                query=(str(query)[:120] if query else None),
+                identifier=(str(identifier)[:120] if identifier else None),
+            )
             if not identifier and not query:
                 return web.json_response({"ok": False, "error": "query or identifier required"}, status=400)
             from services.music.resolver import resolve_query, tracks_from_identifier
@@ -235,6 +283,13 @@ async def start_music_http(bot: "commands.Bot") -> None:
             uid = _parse_user_id(body, session)
             manager.check_member_web(session, uid, need_control=True)
             action = str(body.get("action", "")).lower()
+            log_action(
+                log_http,
+                "api.control",
+                guild_id=session.guild_id,
+                user_id=uid,
+                action=action,
+            )
             msg = ""
             if action == "pause":
                 msg = await session.pause(actor_id=uid)
@@ -333,6 +388,12 @@ async def start_music_http(bot: "commands.Bot") -> None:
 
     async def ws_events(request: web.Request) -> web.WebSocketResponse:
         session, token = session_from_request(request, manager)
+        log_action(
+            log_http,
+            "ws.connect",
+            guild_id=session.guild_id,
+            session_id=session.session_id[:8],
+        )
         ws = web.WebSocketResponse()
         await ws.prepare(request)
 
@@ -353,6 +414,12 @@ async def start_music_http(bot: "commands.Bot") -> None:
         finally:
             if push in session._ws_callbacks:
                 session._ws_callbacks.remove(push)
+            log_action(
+                log_http,
+                "ws.disconnect",
+                guild_id=session.guild_id,
+                session_id=session.session_id[:8],
+            )
         return ws
 
     app.router.add_get("/health", health)

@@ -107,6 +107,8 @@ async def tracks_from_identifier(
     if not ident:
         raise UserFacingError("Missing track identifier.")
 
+    log.info("resolver.tracks_from_identifier kind=%s ident=%s", kind, ident[:120])
+
     load_ident = ident
     if kind == "track" and is_url(ident):
         load_ident = youtube_video_only_url(ident)
@@ -119,6 +121,7 @@ async def tracks_from_identifier(
 
     if kind == "playlist":
         if isinstance(result, wavelink.Playlist):
+            log.info("resolver.loaded_playlist tracks=%s", len(tracks))
             return tracks
         raise UserFacingError(
             "That link is a single track, not a playlist. Use Add for one song."
@@ -161,6 +164,8 @@ async def search_media(query: str, *, limit: int = 10) -> list[SearchResult]:
     q = _strip_search_prefix(query.strip())
     if not q:
         return []
+
+    log.info("resolver.search_media query=%r limit=%s", q[:120], limit)
 
     if is_url(q):
         if is_youtube_playlist_url(q):
@@ -211,6 +216,8 @@ async def resolve_query(
     q = query.strip()
     if not q:
         raise UserFacingError("Please provide a search term or URL.")
+
+    log.info("resolver.resolve_query query=%r source=%s", q[:120], source)
 
     if is_url(q):
         try:

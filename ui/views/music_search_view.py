@@ -4,7 +4,9 @@ from collections.abc import Awaitable, Callable
 
 import discord
 
+from core.action_log import log_action
 from core.config import ConfigManager
+from core.loggers import log_ui
 from services.music.resolver import tracks_from_identifier
 from services.music.search_results import SearchResult, _format_ms, external_url, markdown_link
 
@@ -118,6 +120,14 @@ class MusicPlaylistConfirmView(discord.ui.View):
     async def add_all(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
+            log_action(
+                log_ui,
+                "search.playlist_add",
+                user_id=interaction.user.id,
+                guild_id=interaction.guild.id if interaction.guild else None,
+                playlist=self.item.title,
+                track_count=self.item.track_count,
+            )
             tracks = await tracks_from_identifier(self.item.identifier, kind="playlist")
             member = interaction.guild.get_member(interaction.user.id) if interaction.guild else None
             count, started = await self.session.add_tracks(
@@ -216,6 +226,13 @@ class MusicSearchView(discord.ui.View):
             tracks = await tracks_from_identifier(item.identifier, kind="track")
             track = tracks[0]
             track.extras = {"requester_id": self.requester_id}
+            log_action(
+                log_ui,
+                "search.track_add",
+                user_id=interaction.user.id,
+                guild_id=interaction.guild.id if interaction.guild else None,
+                track=track.title,
+            )
             member = interaction.guild.get_member(interaction.user.id) if interaction.guild else None
             started = await self.session.add_tracks(
                 [track],

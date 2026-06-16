@@ -8,8 +8,10 @@ import discord
 from discord.enums import SeparatorSpacing
 from discord.ext import commands
 
+from core.action_log import log_interaction
 from core.config import ConfigManager
 from core.errors.exceptions import UserFacingError
+from core.loggers import log_ui
 from services.music.permissions import can_control, can_queue, require_voice
 from services.music.queue import LoopMode
 from services.music.resolver import search_media
@@ -26,7 +28,7 @@ from ui.views.music_panel_support import (
 from core.activity_entry_point import launch_music_activity
 from ui.views.music_search_view import MusicSearchView, search_results_embed
 
-log = logging.getLogger("Music")
+log = logging.getLogger("UI")
 
 
 def _voice_id(session) -> int | None:
@@ -244,13 +246,21 @@ class _MPActionButton(discord.ui.Button):
 
 
 async def _panel_act(interaction: discord.Interaction, state: MusicPanelState, action: str) -> None:
+    log_interaction(log_ui, interaction, f"panel.{action}")
     await interaction.response.defer(ephemeral=True)
     try:
         member = interaction.guild.get_member(interaction.user.id)
         if not can_control(member, voice_channel_id=_voice_id(state.session)):
             raise UserFacingError("You cannot control playback.")
         actor_id = interaction.user.id
-        await getattr(state.session, action)(actor_id=actor_id)
+        result = await getattr(state.session, action)(actor_id=actor_id)
+        log_ui.info(
+            "panel.%s ok guild_id=%s user_id=%s result=%s",
+            action,
+            interaction.guild.id,
+            actor_id,
+            str(result)[:120],
+        )
         new_state = MusicPanelState(
             session=state.session,
             bot=state.bot,
@@ -260,8 +270,21 @@ async def _panel_act(interaction: discord.Interaction, state: MusicPanelState, a
         )
         await edit_music_panel(interaction, new_state)
     except UserFacingError as exc:
+        log_ui.info(
+            "panel.%s rejected guild_id=%s user_id=%s reason=%s",
+            action,
+            interaction.guild.id if interaction.guild else None,
+            interaction.user.id,
+            exc.user_message,
+        )
         await interaction.followup.send(exc.user_message, ephemeral=True)
     except Exception:
+        log_ui.exception(
+            "panel.%s failed guild_id=%s user_id=%s",
+            action,
+            interaction.guild.id if interaction.guild else None,
+            interaction.user.id,
+        )
         await interaction.followup.send("Action failed.", ephemeral=True)
 
 

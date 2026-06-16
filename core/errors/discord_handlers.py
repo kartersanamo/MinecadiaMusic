@@ -11,6 +11,7 @@ from discord.ext import commands
 from core.errors.interactions import safe_reply
 from core.errors.logging import log_exception
 from core.errors.messages import user_message_for
+from core.action_log import interaction_context, log_action
 
 
 def install_error_handlers(
@@ -27,6 +28,13 @@ def install_error_handlers(
         interaction: discord.Interaction, error: app_commands.AppCommandError
     ) -> None:
         message = user_message_for(error)
+        log_action(
+            log_commands,
+            "command.error",
+            level=logging.ERROR,
+            **interaction_context(interaction),
+            error=str(error)[:200],
+        )
         log_exception(
             log_commands,
             error,

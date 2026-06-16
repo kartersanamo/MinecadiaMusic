@@ -6,6 +6,8 @@ from discord.ext import commands
 
 from core.errors.exceptions import UserFacingError
 from core.errors.logging import log_exception
+from core.action_log import log_interaction
+from core.loggers import log_commands
 from core.config import ConfigManager
 from core.loggers import log_commands
 from ui.views.music_panel_layout_view import MusicPanelLayoutView
@@ -30,12 +32,19 @@ class Music(commands.Cog):
     @app_commands.guild_only()
     @app_commands.command(name="music", description="Open the music player panel")
     async def music(self, interaction: discord.Interaction) -> None:
+        log_interaction(log_commands, interaction, "command.music.start")
         await interaction.response.defer()
         try:
             if not interaction.guild:
                 raise UserFacingError("Music commands can only be used in a server.")
             session = self.bot.app.music.get_session(interaction.guild.id)
             url = session.refresh_panel(interaction.user.id)
+            log_commands.info(
+                "command.music.panel guild_id=%s user_id=%s session_id=%s",
+                interaction.guild.id,
+                interaction.user.id,
+                session.session_id[:8],
+            )
             state = MusicPanelState(
                 session=session,
                 bot=self.bot,
@@ -52,6 +61,7 @@ class Music(commands.Cog):
                 wait=True,
             )
             session.bind_panel_message(msg, interaction.user.id)
+            log_interaction(log_commands, interaction, "command.music.ok")
         except UserFacingError as exc:
             await interaction.followup.send(
                 embed=_embed("Music", exc.user_message, self.bot),

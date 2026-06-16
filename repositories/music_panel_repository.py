@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from core.action_log import log_action
 from core.database import DatabasePool
+from core.loggers import log_database
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS `music_panels` (
@@ -76,6 +78,14 @@ class MusicPanelRepository:
                 activity_json,
             ),
         )
+        log_action(
+            log_database,
+            "music_panel.upsert",
+            guild_id=guild_id,
+            channel_id=channel_id,
+            message_id=message_id,
+            session_id=session_id[:8],
+        )
 
     async def delete(self, guild_id: int) -> None:
         await self.ensure_schema()
@@ -83,10 +93,12 @@ class MusicPanelRepository:
             "DELETE FROM `music_panels` WHERE `guild_id` = %s",
             (guild_id,),
         )
+        log_action(log_database, "music_panel.delete", guild_id=guild_id)
 
     async def fetch_all(self) -> list[dict[str, Any]]:
         await self.ensure_schema()
         rows = await self._db.execute("SELECT * FROM `music_panels`")
+        log_action(log_database, "music_panel.fetch_all", count=len(rows))
         for row in rows:
             raw = row.get("activity_log")
             if isinstance(raw, str):

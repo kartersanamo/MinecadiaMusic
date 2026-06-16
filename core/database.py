@@ -3,7 +3,8 @@ from typing import Optional
 import aiomysql
 
 from core.config import ConfigManager
-from core.loggers import log_tasks
+from core.loggers import log_database
+from core.action_log import log_action
 
 
 class DatabasePool:
@@ -30,6 +31,8 @@ class DatabasePool:
     async def execute(self, query: str, params: tuple | None = None) -> list:
         rows = []
         connection = None
+        preview = " ".join(query.split())[:160]
+        log_database.debug("db.execute query=%s params=%s", preview, params)
         try:
             connection = await self.connect()
             async with connection.cursor() as cursor:
@@ -38,10 +41,11 @@ class DatabasePool:
                 else:
                     await cursor.execute(query)
                 rows = await cursor.fetchall()
+            log_action(log_database, "db.execute.ok", rows=len(rows))
         except Exception as error:
             from core.errors.db import log_query_failure
 
-            log_query_failure(log_tasks, error, query)
+            log_query_failure(log_database, error, query)
         finally:
             if connection:
                 connection.close()

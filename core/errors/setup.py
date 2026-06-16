@@ -9,6 +9,8 @@ from core.errors.discord_handlers import (
     install_asyncio_exception_handler,
     install_error_handlers,
 )
+from core.event_log import install_event_logging
+from core.loggers import log_events
 
 
 def wire_bot(
@@ -24,6 +26,7 @@ def wire_bot(
         log_commands=log_commands,
         log_tasks=log_tasks,
     )
+    install_event_logging(bot, log_events=log_events)
 
 
 async def wire_bot_async_setup(

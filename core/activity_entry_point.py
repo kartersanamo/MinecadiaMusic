@@ -5,6 +5,8 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
+from core.action_log import log_action
+
 import aiohttp
 import discord
 
@@ -65,6 +67,12 @@ async def launch_music_activity(
     """Respond to an interaction by launching the Discord Activity. Returns True on success."""
     try:
         await interaction.response.launch_activity()
+        log_action(
+            log,
+            "activity.launch_ok",
+            user_id=interaction.user.id,
+            guild_id=interaction.guild_id,
+        )
         log.info(
             "Launched Activity for user %s in guild %s",
             interaction.user.id,
@@ -72,6 +80,14 @@ async def launch_music_activity(
         )
         return True
     except discord.HTTPException as exc:
+        log_action(
+            log,
+            "activity.launch_failed",
+            user_id=interaction.user.id,
+            guild_id=interaction.guild_id,
+            code=getattr(exc, "code", None),
+            error=str(exc)[:160],
+        )
         log.warning(
             "Activity launch failed for user %s (code=%s): %s",
             interaction.user.id,

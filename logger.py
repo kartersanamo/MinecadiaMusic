@@ -1,16 +1,20 @@
 from logging.handlers import TimedRotatingFileHandler
 import logging.config
 import datetime
-import pytz
 import os
+import pytz
 
 GRAY = "\033[90m"
 LIGHT_PINK = "\033[95m"
 RESET = "\033[0m"
 
 EST = pytz.timezone('US/Eastern')
+os.makedirs("logs", exist_ok=True)
 current_time_est = datetime.datetime.now(EST)
 log_filename = f"logs/{current_time_est.strftime('%Y-%m-%d')}.log"
+
+_DEFAULT_LEVEL = os.getenv("LOG_LEVEL", "DEBUG").upper()
+
 
 class ESTFormatter(logging.Formatter):
     def formatTime(self, record, datefmt = None):
@@ -40,12 +44,26 @@ class CustomTimedRotatingFileHandler(TimedRotatingFileHandler):
         self.stream = self._open()
         self.rolloverAt = self.rolloverAt + self.interval
 
+_LOGGERS = (
+    "Tasks",
+    "Commands",
+    "Music",
+    "music_http",
+    "UI",
+    "Events",
+    "Database",
+    "discord",
+    "discord.gateway",
+    "discord.client",
+    "wavelink",
+)
+
 LOGGING_CONFIG = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
         "file": {
-            "format": "%(levelname)-10s  %(asctime)s  %(funcName)-15s : %(message)s",
+            "format": "%(levelname)-10s  %(asctime)s  %(name)-14s  %(funcName)-20s  %(message)s",
             "()": ESTFormatter
         },
         "standard": {
@@ -56,52 +74,37 @@ LOGGING_CONFIG = {
     },
     "handlers": {
         "console": {
-            "level": "DEBUG",
+            "level": _DEFAULT_LEVEL,
             "class": "logging.StreamHandler",
             "formatter": "standard"
         },
         "file": {
-            "level": "DEBUG",
+            "level": _DEFAULT_LEVEL,
             "class": "logging.handlers.TimedRotatingFileHandler",
             "filename": log_filename,
             "when": "midnight",
             "interval": 1,
-            "backupCount": 7,
+            "backupCount": 14,
             "formatter": "file"
         }
     },
     "loggers": {
-        "Tasks": {
+        name: {
             "handlers": ["console", "file"],
-            "level": "INFO",
-            "propagate": False
-        },
-        "Commands": {
-            "handlers": ["console", "file"],
-            "level": "INFO",
-            "propagate": False
-        },
-        "discord": {
-            "handlers": ["console", "file"],
-            "level": "DEBUG",
-            "propagate": False
-        },
-        "Music": {
-            "handlers": ["console", "file"],
-            "level": "INFO",
-            "propagate": False
-        },
-        "music_http": {
-            "handlers": ["console", "file"],
-            "level": "INFO",
-            "propagate": False
+            "level": _DEFAULT_LEVEL,
+            "propagate": False,
         }
-    }
+        for name in _LOGGERS
+    },
+    "root": {
+        "handlers": ["console", "file"],
+        "level": _DEFAULT_LEVEL,
+    },
 }
 
 logging.config.dictConfig(LOGGING_CONFIG)
 
-for logger_name in LOGGING_CONFIG["loggers"]:
+for logger_name in _LOGGERS:
     logger = logging.getLogger(logger_name)
     for handler in logger.handlers:
         if isinstance(handler, TimedRotatingFileHandler):
@@ -118,3 +121,9 @@ for logger_name in LOGGING_CONFIG["loggers"]:
             )
             new_handler.setFormatter(handler.formatter)
             logger.addHandler(new_handler)
+
+logging.getLogger("Tasks").info(
+    "Logging initialized level=%s file=%s",
+    _DEFAULT_LEVEL,
+    log_filename,
+)
