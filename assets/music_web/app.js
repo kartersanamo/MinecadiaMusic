@@ -309,7 +309,7 @@
 
     showGate("Connecting…", "Loading your music dashboard.");
 
-    if await validateStoredSession()) {
+    if (await validateStoredSession()) {
       await refreshActivityCredentials().catch(() => {});
       return;
     }
