@@ -135,9 +135,16 @@
   };
 
   const userParam = params.get("user");
-  if (userParam) {
+  const loggedInParam = params.get("logged_in");
+  if (loggedInParam && userParam) {
     userId = userParam;
     sessionStorage.setItem(USER_ID_KEY, userParam);
+  } else if (!isDiscordActivityHost()) {
+    userId = sessionStorage.getItem(USER_ID_KEY) || "";
+  }
+
+  function isSignedIn() {
+    return !!userId;
   }
 
   function hideBootFallback() {
@@ -302,10 +309,6 @@
       if (!res.ok) return false;
       const data = await res.json().catch(() => null);
       if (!data) return false;
-      if (data.panelCreatorId && !userId) {
-        userId = String(data.panelCreatorId);
-        persistSessionCredentials();
-      }
       return true;
     } catch (_) {
       return false;
@@ -346,10 +349,46 @@
   }
 
   function setSignedInLabel() {
-    if (!userId) return;
-    els.userLabel.textContent = "Linked via Discord";
+    if (!isSignedIn()) return;
+    els.userLabel.textContent = "Signed in with Discord";
     els.userLabel.classList.remove("hidden");
     els.btnLogin.classList.add("hidden");
+  }
+
+  function setModifyHint() {
+    if (isDiscordActivityHost()) {
+      if (!isSignedIn()) {
+        els.channelLabel.textContent = "Sign in through Discord Activity to control playback";
+      }
+      return;
+    }
+    if (!isSignedIn()) {
+      els.channelLabel.textContent = "View-only — sign in with Discord and join the bot's voice channel to control";
+      els.btnLogin.classList.remove("hidden");
+      return;
+    }
+    if (state?.voiceChannel) {
+      els.channelLabel.textContent = `Join ${state.voiceChannel} in Discord to control playback`;
+    }
+  }
+
+  function setControlsEnabled(enabled) {
+    const disabled = !enabled;
+    els.btnPlayPause.disabled = disabled;
+    els.volume.disabled = disabled;
+    if (els.progressTrack) {
+      els.progressTrack.classList.toggle("is-disabled", disabled);
+      els.progressTrack.tabIndex = disabled ? -1 : 0;
+    }
+    document.querySelectorAll(".transport .icon-btn[data-action]").forEach((btn) => {
+      btn.disabled = disabled;
+    });
+    els.loopGroup.querySelectorAll(".segmented-btn").forEach((btn) => {
+      btn.disabled = disabled;
+    });
+    document.querySelectorAll(".queue-item .btn-remove").forEach((btn) => {
+      btn.disabled = disabled;
+    });
   }
 
   function setLive(online) {
@@ -614,9 +653,19 @@
   function render() {
     if (!state) return;
 
-    els.channelLabel.textContent = state.voiceChannel
-      ? `In ${state.voiceChannel}`
-      : "Not in voice — join a VC in Discord";
+    const canModify = isSignedIn();
+    setControlsEnabled(canModify);
+    setModifyHint();
+
+    if (state.voiceChannel && isSignedIn()) {
+      els.channelLabel.textContent = `In ${state.voiceChannel} — you must be in this voice channel to control`;
+    } else if (!isSignedIn() && !isDiscordActivityHost()) {
+      setModifyHint();
+    } else if (state.voiceChannel) {
+      els.channelLabel.textContent = `In ${state.voiceChannel}`;
+    } else {
+      els.channelLabel.textContent = "Not in voice — join a VC in Discord";
+    }
 
     const cur = state.current;
     if (cur) {
@@ -723,11 +772,6 @@
   async function refresh() {
     try {
       const data = await api("/state");
-      if (data.panelCreatorId && !userId) {
-        userId = String(data.panelCreatorId);
-        sessionStorage.setItem(USER_ID_KEY, userId);
-        setSignedInLabel();
-      }
       applyState(data);
     } catch (e) {
       const msg = String(e.message || "");
@@ -771,6 +815,10 @@
 
   async function control(action, extra = {}, options = {}) {
     const { silent = false } = options;
+    if (!isSignedIn()) {
+      toast("Sign in with Discord and join the bot's voice channel to control playback.");
+      return;
+    }
     try {
       const data = await api("/control", {
         method: "POST",
@@ -784,6 +832,10 @@
   }
 
   async function removeQueue(index) {
+    if (!isSignedIn()) {
+      toast("Sign in with Discord and join the bot's voice channel to modify the queue.");
+      return;
+    }
     try {
       await api(`/queue/${index}`, {
         method: "DELETE",
@@ -797,6 +849,9 @@
   }
 
   async function addToQueue(item) {
+    if (!isSignedIn()) {
+      throw new Error("Sign in with Discord and join the bot's voice channel to add music.");
+    }
     const isPlaylist = item.kind === "playlist";
     await api("/queue", {
       method: "POST",
@@ -975,8 +1030,7 @@
   });
 
   if (params.get("logged_in")) {
-    els.userLabel.textContent = "Signed in with Discord";
-    els.userLabel.classList.remove("hidden");
+    setSignedInLabel();
     els.btnLogin.classList.add("hidden");
   }
 

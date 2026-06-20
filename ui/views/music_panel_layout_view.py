@@ -12,7 +12,7 @@ from core.action_log import log_interaction
 from core.config import ConfigManager
 from core.errors.exceptions import UserFacingError
 from core.loggers import log_ui
-from services.music.permissions import can_control, can_queue, require_voice
+from services.music.permissions import can_control, can_queue, in_voice_channel, require_voice
 from services.music.queue import LoopMode
 from ui.views.music_panel_support import (
     MusicPanelState,
@@ -59,7 +59,12 @@ class _QueryModal(discord.ui.Modal, title="Play music"):
         await interaction.response.defer(ephemeral=True)
         try:
             member = interaction.guild.get_member(interaction.user.id)
-            if not can_queue(member, voice_channel_id=_voice_id(self.state.session)):
+            vc_id = _voice_id(self.state.session)
+            player = self.state.session.get_player()
+            if vc_id and member and not in_voice_channel(member, vc_id):
+                channel_name = player.channel.name if player and player.channel else "voice channel"
+                raise UserFacingError(f"Join **{channel_name}** to queue music.")
+            if not can_queue(member, voice_channel_id=vc_id):
                 raise UserFacingError("You cannot queue music right now.")
             channel = require_voice(member)
             if not channel:
@@ -316,7 +321,12 @@ async def _panel_act(interaction: discord.Interaction, state: MusicPanelState, a
     await interaction.response.defer(ephemeral=True)
     try:
         member = interaction.guild.get_member(interaction.user.id)
-        if not can_control(member, voice_channel_id=_voice_id(state.session)):
+        player = state.session.get_player()
+        vc_id = player.channel.id if player and player.channel else None
+        if vc_id and member and not in_voice_channel(member, vc_id):
+            channel_name = player.channel.name if player and player.channel else "voice channel"
+            raise UserFacingError(f"Join **{channel_name}** to control playback.")
+        if not can_control(member, voice_channel_id=vc_id):
             raise UserFacingError("You cannot control playback.")
         actor_id = interaction.user.id
         result = await getattr(state.session, action)(actor_id=actor_id)

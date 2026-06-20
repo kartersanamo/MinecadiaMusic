@@ -19,7 +19,7 @@ from core.errors.exceptions import UserFacingError
 from core.config import ConfigManager
 from core.action_log import log_action, log_music_method
 from repositories.music_panel_repository import MusicPanelRepository
-from services.music.permissions import can_control, can_queue, require_voice
+from services.music.permissions import can_control, can_queue, in_voice_channel, require_voice
 from services.music.queue import LoopMode, TrackInfo, _format_ms
 from services.music.resolver import resolve_query
 
@@ -171,10 +171,7 @@ class GuildMusicSession:
 
     def public_url(self) -> str:
         base = os.getenv("MUSIC_PUBLIC_BASE_URL", "http://127.0.0.1:8790").rstrip("/")
-        url = f"{base}/{self.session_id}?token={self.session_token}"
-        if self.panel_creator_id:
-            url += f"&user={self.panel_creator_id}"
-        return url
+        return f"{base}/{self.session_id}?token={self.session_token}"
 
     def subscribe(self, cb: Callable[[], Awaitable[None] | None]) -> None:
         self._ws_callbacks.append(cb)
@@ -367,6 +364,7 @@ class GuildMusicSession:
         playing = False
         volume = int(_music_cfg().get("DEFAULT_VOLUME", 100))
         channel_name = None
+        voice_channel_id = None
 
         if player:
             paused = player.paused
@@ -374,6 +372,7 @@ class GuildMusicSession:
             volume = player.volume or volume
             if player.channel:
                 channel_name = player.channel.name
+                voice_channel_id = player.channel.id
             if player.current:
                 current = self._enrich_track_dict(
                     TrackInfo.from_playable(player.current).to_dict()
@@ -395,6 +394,7 @@ class GuildMusicSession:
             "playing": playing,
             "volume": volume,
             "voiceChannel": channel_name,
+            "voiceChannelId": str(voice_channel_id) if voice_channel_id else None,
             "panelUrl": self.public_url(),
             "panelCreatorId": self.panel_creator_id,
             "activity": list(self._activity_log),
@@ -901,6 +901,16 @@ class MusicSessionManager:
             raise UserFacingError("You must be in this Discord server.")
         player = session.get_player()
         vc_id = player.channel.id if player and player.channel else None
+        if need_control or need_queue:
+            if not vc_id:
+                raise UserFacingError(
+                    "The bot is not in a voice channel — join a VC and use **Join VC** in Discord first."
+                )
+            if not in_voice_channel(member, vc_id):
+                channel_name = player.channel.name if player and player.channel else "voice channel"
+                raise UserFacingError(
+                    f"Join **{channel_name}** in Discord to control this session."
+                )
         if need_control and not can_control(member, voice_channel_id=vc_id):
             log_action(
                 log,

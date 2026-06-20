@@ -18,6 +18,17 @@ def _has_role(member: discord.Member, role_names: list[str]) -> bool:
     return any(name in names for name in role_names)
 
 
+def in_voice_channel(
+    member: discord.Member,
+    voice_channel_id: Optional[int],
+) -> bool:
+    if not voice_channel_id:
+        return False
+    if not member.voice or not member.voice.channel:
+        return False
+    return member.voice.channel.id == voice_channel_id
+
+
 def can_open_panel(member: discord.Member) -> bool:
     cfg = _music_config()
     return _has_role(member, cfg.get("DJ_ROLES", ConfigManager.all().get("ADMIN_ROLES", [])))
@@ -28,12 +39,10 @@ def can_control(
     *,
     voice_channel_id: Optional[int] = None,
 ) -> bool:
-    cfg = _music_config()
-    if _has_role(member, cfg.get("DJ_ROLES", [])):
-        return True
-    if voice_channel_id and member.voice and member.voice.channel:
-        return member.voice.channel.id == voice_channel_id
-    return False
+    if not voice_channel_id:
+        cfg = _music_config()
+        return _has_role(member, cfg.get("DJ_ROLES", []))
+    return in_voice_channel(member, voice_channel_id)
 
 
 def can_queue(
@@ -42,13 +51,11 @@ def can_queue(
     voice_channel_id: Optional[int] = None,
 ) -> bool:
     cfg = _music_config()
-    if _has_role(member, cfg.get("DJ_ROLES", [])):
-        return True
-    if _has_role(member, cfg.get("REQUEST_ROLES", ["*"])):
-        if voice_channel_id and member.voice and member.voice.channel:
-            return member.voice.channel.id == voice_channel_id
+    if not _has_role(member, cfg.get("REQUEST_ROLES", ["*"])):
+        return False
+    if not voice_channel_id:
         return member.voice is not None
-    return False
+    return in_voice_channel(member, voice_channel_id)
 
 
 def require_voice(member: discord.Member) -> Optional[discord.VoiceChannel]:

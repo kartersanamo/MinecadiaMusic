@@ -131,7 +131,9 @@ async def activity_bootstrap_for_user(
     session = manager.sessions.get(guild_id)
     if not session or not session.panel_owner_id:
         raise UserFacingError("No music panel for this server. Run **`/music`** first.")
-    manager.check_member_web(session, user_id, need_queue=True)
+    guild = manager.bot.get_guild(guild_id)
+    if not guild or not guild.get_member(user_id):
+        raise UserFacingError("You must be in this Discord server.")
     session.oauth_users[user_id] = time.time()
     log_action(
         log_http,

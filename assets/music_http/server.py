@@ -142,16 +142,12 @@ def _api_error_response(exc: Exception, *, context: str) -> web.Response:
 
 def _parse_user_id(body: dict, session) -> int:
     uid = body.get("userId") or body.get("user_id")
-    if uid:
-        return int(uid)
-    if session.panel_creator_id:
-        return int(session.panel_creator_id)
-    if session.oauth_users:
-        return int(next(iter(session.oauth_users.keys())))
-    raise web.HTTPUnauthorized(
-        text='{"error":"Discord login required"}',
-        content_type="application/json",
-    )
+    if not uid:
+        raise UserFacingError("Sign in with Discord to modify this session.")
+    uid = int(uid)
+    if uid not in session.oauth_users:
+        raise UserFacingError("Sign in with Discord to modify this session.")
+    return uid
 
 
 async def start_music_http(bot: "commands.Bot") -> None:
@@ -233,16 +229,6 @@ async def start_music_http(bot: "commands.Bot") -> None:
             body = await request.json()
             if not q:
                 q = str(body.get("q", "")).strip()
-            if body.get("userId") or body.get("user_id") or session.oauth_users:
-                try:
-                    uid = _parse_user_id(body, session)
-                    manager.check_member_web(session, uid, need_control=True)
-                except web.HTTPException:
-                    raise
-                except UserFacingError as exc:
-                    return web.json_response({"error": exc.user_message}, status=403)
-                except Exception as exc:
-                    return _api_error_response(exc, context="api_search auth")
         if not q:
             return web.json_response({"results": [], "page": 0, "total": 0, "totalPages": 0})
         page_raw = request.query.get("page") or body.get("page")
@@ -396,12 +382,11 @@ async def start_music_http(bot: "commands.Bot") -> None:
             user = await discord_fetch_user(token_data["access_token"])
             user_id = int(user["id"])
             session.oauth_users[user_id] = time.time()
-            manager.check_member_web(session, user_id, need_queue=True)
         except Exception as exc:
             log.exception("OAuth failed")
             return web.Response(text=f"Login failed: {exc}", status=500)
 
-        resp = web.HTTPFound(f"/{session_id}?token={token}&logged_in=1")
+        resp = web.HTTPFound(f"/{session_id}?token={token}&logged_in=1&user={user_id}")
         return resp
 
     async def api_activity_token(request: web.Request) -> web.Response:
