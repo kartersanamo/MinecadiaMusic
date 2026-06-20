@@ -13,7 +13,29 @@ if ! flock -n 9; then
 fi
 
 if [ -x ".venv/bin/python" ]; then
-    exec "./.venv/bin/python" main.py
+    PYTHON="./.venv/bin/python"
 else
-    exec python3 main.py
+    PYTHON="python3"
 fi
+
+RESTART_DELAY="${MINECADIA_BOT_RESTART_DELAY:-5}"
+
+while true; do
+    set +e
+    "$PYTHON" main.py
+    code=$?
+    set -e
+
+    if [ "$code" -eq 0 ]; then
+        echo "$BOT_NAME exited cleanly." >&2
+        break
+    fi
+
+    if [ "$code" -eq 130 ] || [ "$code" -eq 143 ]; then
+        echo "$BOT_NAME interrupted — not restarting." >&2
+        break
+    fi
+
+    echo "$BOT_NAME exited with code $code — restarting in ${RESTART_DELAY}s..." >&2
+    sleep "$RESTART_DELAY"
+done

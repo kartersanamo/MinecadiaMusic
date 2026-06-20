@@ -85,6 +85,24 @@ class Client(commands.Bot):
         await self.setup_cogs()
         await self.setup_music_http()
 
+    async def on_connect(self):
+        from core.liveness import mark_connected
+
+        mark_connected()
+        log_tasks.info("Discord gateway connected")
+
+    async def on_disconnect(self):
+        from core.liveness import mark_disconnected
+
+        mark_disconnected()
+        log_tasks.warning("Discord gateway disconnected — awaiting reconnect")
+
+    async def on_resume(self):
+        from core.liveness import mark_connected
+
+        mark_connected()
+        log_tasks.info("Bot connection resumed")
+
     @task("Logging in")
     async def on_ready(self):
         from ui.views.music_panel_layout_view import register_persistent_music_panel
