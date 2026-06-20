@@ -63,7 +63,10 @@
             <h1 id="npTitle" class="hero-title">Nothing playing</h1>
             <p id="npAuthor" class="hero-artist"></p>
             <div class="progress-wrap">
-              <div class="progress-track"><div id="progressBar" class="progress-fill"></div></div>
+              <div class="progress-track" id="progressTrack" role="slider" aria-label="Seek" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
+                <div id="progressBar" class="progress-fill"></div>
+                <div id="progressThumb" class="progress-thumb" aria-hidden="true"></div>
+              </div>
               <div class="progress-times">
                 <span id="npPos">0:00</span>
                 <span id="npDur">0:00</span>
@@ -72,6 +75,9 @@
             <div class="transport" role="group" aria-label="Playback controls">
               <button type="button" class="icon-btn" data-action="shuffle" title="Shuffle queue">
                 <svg viewBox="0 0 24 24"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+              </button>
+              <button type="button" class="icon-btn" data-action="restart" title="Restart track">
+                <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 13.3-6M20 12a8 8 0 0 1-13.3 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M17 4h3v3M4 20v-3h3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
               </button>
               <button type="button" class="icon-btn icon-btn-lg" id="btnPlayPause" data-action="pause" title="Pause">
                 <svg class="icon-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" fill="currentColor"/><rect x="14" y="4" width="4" height="16" fill="currentColor"/></svg>

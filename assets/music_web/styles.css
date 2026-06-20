@@ -377,10 +377,21 @@ body {
 .progress-wrap { margin-top: 1rem; }
 
 .progress-track {
+  position: relative;
   height: 6px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
-  overflow: hidden;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.progress-track.is-disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.progress-track.is-scrubbing .progress-fill {
+  transition: none;
 }
 
 .progress-fill {
@@ -390,6 +401,30 @@ body {
   background: linear-gradient(90deg, var(--accent), #ffe066);
   box-shadow: 0 0 12px var(--accent-glow);
   transition: width 0.35s linear;
+  pointer-events: none;
+}
+
+.progress-thumb {
+  position: absolute;
+  top: 50%;
+  left: 0%;
+  width: 14px;
+  height: 14px;
+  margin-top: -7px;
+  margin-left: -7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px rgba(12, 13, 16, 0.9), 0 0 10px var(--accent-glow);
+  opacity: 0;
+  transform: scale(0.85);
+  transition: opacity 0.15s, transform 0.15s;
+  pointer-events: none;
+}
+
+.progress-track:not(.is-disabled):hover .progress-thumb,
+.progress-track.is-scrubbing .progress-thumb {
+  opacity: 1;
+  transform: scale(1);
 }
 
 .progress-times {

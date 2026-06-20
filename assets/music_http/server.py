@@ -346,6 +346,16 @@ async def start_music_http(bot: "commands.Bot") -> None:
                 msg = await session.resume(actor_id=uid)
             elif action == "skip":
                 msg = await session.skip(actor_id=uid)
+            elif action == "restart":
+                msg = await session.restart(actor_id=uid)
+            elif action == "seek":
+                position_ms = body.get("positionMs", body.get("position_ms"))
+                if position_ms is None:
+                    return web.json_response(
+                        {"ok": False, "error": "Missing positionMs"},
+                        status=400,
+                    )
+                msg = await session.seek(int(position_ms), actor_id=uid)
             elif action == "stop":
                 msg = await session.stop(actor_id=uid)
             elif action == "shuffle":

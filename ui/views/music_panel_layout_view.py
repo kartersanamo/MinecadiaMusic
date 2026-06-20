@@ -20,6 +20,7 @@ from ui.views.music_panel_support import (
     build_panel_markdown,
     check_panel_owner,
     edit_music_panel,
+    parse_seek_time,
     refresh_panel_message,
     resolve_panel_state,
     _accent_int,
@@ -177,6 +178,65 @@ class _MPJoinButton(discord.ui.Button):
             await edit_music_panel(interaction, state)
         except UserFacingError as exc:
             await interaction.followup.send(exc.user_message, ephemeral=True)
+
+
+class _MPSeekModal(discord.ui.Modal, title="Seek"):
+    position = discord.ui.TextInput(
+        label="Time (mm:ss or seconds)",
+        placeholder="e.g. 1:30",
+        max_length=16,
+        required=True,
+    )
+
+    def __init__(self, state: MusicPanelState):
+        super().__init__()
+        self.state = state
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            member = interaction.guild.get_member(interaction.user.id)
+            if not can_control(member, voice_channel_id=_voice_id(self.state.session)):
+                raise UserFacingError("You cannot control playback.")
+            player = self.state.session.get_player()
+            if not player or not player.current:
+                raise UserFacingError("Nothing is playing.")
+            duration = player.current.length or 0
+            if duration <= 0:
+                raise UserFacingError("Cannot seek during a live stream.")
+            position_ms = parse_seek_time(self.position.value, duration)
+            result = await self.state.session.seek(position_ms, actor_id=interaction.user.id)
+            new_state = MusicPanelState(
+                session=self.state.session,
+                bot=self.state.bot,
+                owner_id=self.state.owner_id,
+                panel_url=self.state.panel_url,
+                guild=self.state.guild,
+            )
+            await edit_music_panel(interaction, new_state)
+            await interaction.followup.send(result, ephemeral=True)
+        except UserFacingError as exc:
+            await interaction.followup.send(exc.user_message, ephemeral=True)
+        except Exception:
+            log_ui.exception("panel.seek failed")
+            await interaction.followup.send("Seek failed.", ephemeral=True)
+
+
+class _MPSeekButton(discord.ui.Button):
+    def __init__(self, bot: commands.Bot, *, disabled: bool = False):
+        super().__init__(
+            label="Seek",
+            style=discord.ButtonStyle.secondary,
+            custom_id="mp_seek",
+            disabled=disabled,
+        )
+        self._bot = bot
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        state = await resolve_panel_state(interaction, self._bot)
+        if not state or not await check_panel_owner(interaction, state.owner_id):
+            return
+        await interaction.response.send_modal(_MPSeekModal(state))
 
 
 class _MPRefreshButton(discord.ui.Button):
@@ -531,6 +591,14 @@ def _build_panel_rows(
         _MPPauseButton(bot_ref, paused=paused, disabled=not playing and not paused),
         _MPActionButton(
             bot_ref,
+            label="Restart",
+            action="restart",
+            style=discord.ButtonStyle.secondary,
+            custom_id="mp_restart",
+            disabled=not playing and not paused,
+        ),
+        _MPActionButton(
+            bot_ref,
             label="Skip",
             action="skip",
             style=discord.ButtonStyle.secondary,
@@ -543,6 +611,9 @@ def _build_panel_rows(
             style=discord.ButtonStyle.danger,
             custom_id="mp_stop",
         ),
+        _MPSeekButton(bot_ref, disabled=not playing and not paused),
+    )
+    row2b = discord.ui.ActionRow(
         _MPActionButton(
             bot_ref,
             label="Shuffle",
@@ -578,10 +649,10 @@ def _build_panel_rows(
 
     if register_only:
         row4 = discord.ui.ActionRow(_MPRemoveSelect(bot_ref))
-        rows = [row1, row2, row3, row4, volume_row]
+        rows = [row1, row2, row2b, row3, row4, volume_row]
         row5 = _dashboard_row(bot_ref, panel_url, register_only=True)
     elif queue:
-        rows = [row1, row2, row3]
+        rows = [row1, row2, row2b, row3]
         if queue_nav_row is not None:
             rows.append(queue_nav_row)
         rows.extend(
@@ -592,7 +663,7 @@ def _build_panel_rows(
         )
         row5 = _dashboard_row(bot_ref, panel_url)
     else:
-        rows = [row1, row2, row3, volume_row]
+        rows = [row1, row2, row2b, row3, volume_row]
         row5 = _dashboard_row(bot_ref, panel_url)
 
     return rows, row5

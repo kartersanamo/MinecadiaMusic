@@ -20,7 +20,7 @@ from core.config import ConfigManager
 from core.action_log import log_action, log_music_method
 from repositories.music_panel_repository import MusicPanelRepository
 from services.music.permissions import can_control, can_queue, require_voice
-from services.music.queue import LoopMode, TrackInfo
+from services.music.queue import LoopMode, TrackInfo, _format_ms
 from services.music.resolver import resolve_query
 
 log = logging.getLogger("Music")
@@ -505,6 +505,39 @@ class GuildMusicSession:
             self.log_activity(actor_id, "resumed playback")
         await self.notify()
         return "Resumed playback."
+
+    @log_music_method("seek")
+    async def seek(self, position_ms: int, *, actor_id: int | None = None) -> str:
+        player = self.get_player()
+        if not player:
+            raise UserFacingError("Not connected to voice.")
+        if not player.current:
+            raise UserFacingError("Nothing is playing.")
+        duration = player.current.length or 0
+        if duration <= 0:
+            raise UserFacingError("Cannot seek during a live stream.")
+        position_ms = max(0, min(int(position_ms), duration))
+        await player.seek(position_ms)
+        if actor_id:
+            self.log_activity(actor_id, f"seeked to `{_format_ms(position_ms)}`")
+        await self.notify()
+        return f"Seeked to **{_format_ms(position_ms)}**."
+
+    @log_music_method("restart")
+    async def restart(self, *, actor_id: int | None = None) -> str:
+        player = self.get_player()
+        if not player:
+            raise UserFacingError("Not connected to voice.")
+        if not player.current:
+            raise UserFacingError("Nothing is playing.")
+        if (player.current.length or 0) <= 0:
+            raise UserFacingError("Cannot restart a live stream.")
+        await player.seek(0)
+        if actor_id:
+            title = player.current.title or "track"
+            self.log_activity(actor_id, f"restarted **{title}**")
+        await self.notify()
+        return f"Restarted **{player.current.title or 'track'}**."
 
     @log_music_method("stop")
     async def stop(self, *, actor_id: int | None = None) -> str:

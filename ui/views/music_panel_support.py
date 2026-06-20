@@ -10,6 +10,7 @@ from discord.ext import commands
 
 from core.action_log import log_action
 from core.config import ConfigManager
+from core.errors.exceptions import UserFacingError
 from core.loggers import log_ui
 from services.music.search_results import markdown_link
 
@@ -38,6 +39,40 @@ def _format_ms(ms: int) -> str:
     if h:
         return f"{h}:{m:02d}:{s:02d}"
     return f"{m}:{s:02d}"
+
+
+def _progress_bar_md(position_ms: int, duration_ms: int, *, width: int = 14) -> str:
+    if duration_ms <= 0:
+        return ""
+    ratio = min(1.0, max(0.0, position_ms / duration_ms))
+    filled = round(ratio * width)
+    return f"`{'▓' * filled}{'░' * (width - filled)}`"
+
+
+def parse_seek_time(raw: str, max_ms: int) -> int:
+    text = raw.strip()
+    if not text:
+        raise UserFacingError("Enter a time to seek to.")
+    if ":" in text:
+        parts = text.split(":")
+        try:
+            if len(parts) == 2:
+                minutes, seconds = parts
+                total_seconds = int(minutes) * 60 + float(seconds)
+            elif len(parts) == 3:
+                hours, minutes, seconds = parts
+                total_seconds = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+            else:
+                raise UserFacingError("Use mm:ss or hh:mm:ss.")
+        except ValueError as exc:
+            raise UserFacingError("Invalid time format — use mm:ss or seconds.") from exc
+        ms = int(total_seconds * 1000)
+    else:
+        try:
+            ms = int(float(text) * 1000)
+        except ValueError as exc:
+            raise UserFacingError("Invalid time — use mm:ss or seconds.") from exc
+    return max(0, min(ms, max_ms))
 
 
 def _accent_int() -> int:
@@ -73,11 +108,18 @@ def build_panel_markdown(state: MusicPanelState) -> tuple[str, str, str, str, st
 
     if session_state.get("current"):
         c = session_state["current"]
-        pos = _format_ms(session_state.get("positionMs") or 0)
+        pos_ms = session_state.get("positionMs") or 0
+        dur_ms = c.get("durationMs") or 0
+        pos = _format_ms(pos_ms)
         title_md = f"# {markdown_link(c['title'], c.get('uri'), c.get('identifier'), bold=True)}"
         lines.append("")
         requester = _requester_label(state.guild, c)
-        lines.append(f"by **{c['author']}** · `{pos}` / `{c['durationText']}`{requester}")
+        bar = _progress_bar_md(pos_ms, dur_ms)
+        if bar:
+            lines.append(f"{bar} `{pos}` / `{c['durationText']}`")
+        else:
+            lines.append(f"`{pos}` / `{c['durationText']}`")
+        lines.append(f"by **{c['author']}**{requester}")
         if session_state.get("paused"):
             lines.append("*Paused*")
         elif session_state.get("playing"):

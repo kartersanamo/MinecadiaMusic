@@ -85,6 +85,8 @@
   let positionBase = 0;
   let positionAt = Date.now();
   let progressTimer = null;
+  let scrubbing = false;
+  let scrubPointerId = null;
   let searchLoading = false;
   let searchPage = 0;
   let searchTotalPages = 0;
@@ -110,6 +112,8 @@
     statusChip: document.getElementById("statusChip"),
     loopChip: document.getElementById("loopChip"),
     progressBar: document.getElementById("progressBar"),
+    progressTrack: document.getElementById("progressTrack"),
+    progressThumb: document.getElementById("progressThumb"),
     npPos: document.getElementById("npPos"),
     npDur: document.getElementById("npDur"),
     btnPlayPause: document.getElementById("btnPlayPause"),
@@ -445,23 +449,122 @@
   }
 
   function currentPositionMs() {
+    if (scrubbing) return positionBase;
     if (!state?.playing || state?.paused) return state?.positionMs || 0;
     return positionBase + (Date.now() - positionAt);
   }
 
   function syncPositionFromState() {
+    if (scrubbing) return;
     positionBase = state?.positionMs || 0;
     positionAt = Date.now();
   }
 
+  function canScrub() {
+    const dur = state?.current?.durationMs || 0;
+    return dur > 0 && !!(state?.playing || state?.paused);
+  }
+
+  function progressRatioFromMs(pos, dur) {
+    if (!dur) return 0;
+    return Math.max(0, Math.min(1, pos / dur));
+  }
+
+  function applyProgressVisual(ratio) {
+    const pct = ratio * 100;
+    els.progressBar.style.width = `${pct}%`;
+    if (els.progressThumb) els.progressThumb.style.left = `${pct}%`;
+    const dur = state?.current?.durationMs || 0;
+    els.npPos.textContent = formatMs(Math.round(ratio * dur));
+    if (els.progressTrack) {
+      els.progressTrack.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
+    }
+  }
+
   function updateProgressUi() {
+    if (scrubbing) return;
     const cur = state?.current;
     const dur = cur?.durationMs || 0;
     const pos = cur ? currentPositionMs() : 0;
-    const pct = dur > 0 ? Math.min(100, (pos / dur) * 100) : 0;
-    els.progressBar.style.width = `${pct}%`;
-    els.npPos.textContent = formatMs(pos);
+    applyProgressVisual(progressRatioFromMs(pos, dur));
     els.npDur.textContent = cur?.durationText || formatMs(dur);
+    if (els.progressTrack) {
+      els.progressTrack.classList.toggle("is-disabled", !canScrub());
+    }
+  }
+
+  function ratioFromPointerEvent(event) {
+    const rect = els.progressTrack.getBoundingClientRect();
+    if (!rect.width) return 0;
+    return Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+  }
+
+  async function commitSeek(ratio) {
+    const dur = state?.current?.durationMs || 0;
+    if (!dur) return;
+    const positionMs = Math.round(ratio * dur);
+    positionBase = positionMs;
+    positionAt = Date.now();
+    applyProgressVisual(ratio);
+    try {
+      await control("seek", { positionMs }, { silent: true });
+    } catch (e) {
+      toast(e.message);
+      syncPositionFromState();
+      updateProgressUi();
+    }
+  }
+
+  function setupProgressScrub() {
+    if (!els.progressTrack) return;
+
+    const onPointerDown = (event) => {
+      if (!canScrub()) return;
+      scrubbing = true;
+      scrubPointerId = event.pointerId;
+      els.progressTrack.classList.add("is-scrubbing");
+      els.progressTrack.setPointerCapture(event.pointerId);
+      applyProgressVisual(ratioFromPointerEvent(event));
+      event.preventDefault();
+    };
+
+    const onPointerMove = (event) => {
+      if (!scrubbing || event.pointerId !== scrubPointerId) return;
+      applyProgressVisual(ratioFromPointerEvent(event));
+    };
+
+    const finishScrub = async (event) => {
+      if (!scrubbing || (event && event.pointerId !== scrubPointerId)) return;
+      const ratio = ratioFromPointerEvent(event);
+      scrubbing = false;
+      scrubPointerId = null;
+      els.progressTrack.classList.remove("is-scrubbing");
+      try {
+        els.progressTrack.releasePointerCapture(event.pointerId);
+      } catch (_) {
+        /* ignore */
+      }
+      await commitSeek(ratio);
+    };
+
+    els.progressTrack.addEventListener("pointerdown", onPointerDown);
+    els.progressTrack.addEventListener("pointermove", onPointerMove);
+    els.progressTrack.addEventListener("pointerup", finishScrub);
+    els.progressTrack.addEventListener("pointercancel", finishScrub);
+
+    els.progressTrack.addEventListener("keydown", (event) => {
+      if (!canScrub()) return;
+      const dur = state.current.durationMs;
+      const step = event.shiftKey ? dur * 0.1 : 5000;
+      let pos = currentPositionMs();
+      if (event.key === "ArrowRight") pos = Math.min(dur, pos + step);
+      else if (event.key === "ArrowLeft") pos = Math.max(0, pos - step);
+      else if (event.key === "Home") pos = 0;
+      else if (event.key === "End") pos = dur;
+      else return;
+      event.preventDefault();
+      commitSeek(progressRatioFromMs(pos, dur));
+    });
   }
 
   function renderPlaybackControls() {
@@ -554,8 +657,10 @@
         radial-gradient(ellipse 60% 40% at 50% 100%, rgba(241, 196, 15, 0.05), transparent 50%)`;
     }
 
-    syncPositionFromState();
-    updateProgressUi();
+    if (!scrubbing) {
+      syncPositionFromState();
+      updateProgressUi();
+    }
     renderPlaybackControls();
     renderLoopControls();
 
@@ -664,13 +769,14 @@
     };
   }
 
-  async function control(action, extra = {}) {
+  async function control(action, extra = {}, options = {}) {
+    const { silent = false } = options;
     try {
       const data = await api("/control", {
         method: "POST",
         body: JSON.stringify({ action, userId, ...extra }),
       });
-      if (data.message) toast(data.message);
+      if (data.message && !silent) toast(data.message);
       await refresh();
     } catch (e) {
       toast(e.message);
@@ -889,10 +995,12 @@
     }
 
     showMain();
+    setupProgressScrub();
     refresh();
     connectWs();
     setInterval(refresh, 20000);
     progressTimer = setInterval(() => {
+      if (scrubbing) return;
       if (state?.playing && !state?.paused && state?.current) updateProgressUi();
     }, 1000);
   }
