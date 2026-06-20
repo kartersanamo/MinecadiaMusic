@@ -635,6 +635,10 @@ body {
   justify-self: end;
 }
 
+.result-card.is-playlist .result-body {
+  grid-column: 2;
+}
+
 .result-art {
   width: 52px;
   height: 52px;
@@ -705,17 +709,39 @@ body {
   padding: 0.55rem 0 0 0;
   list-style: none;
   border-top: 1px solid var(--border);
-  max-height: 140px;
+  max-height: min(320px, 45vh);
   overflow-y: auto;
 }
 
 .playlist-tracks li {
   font-size: 0.78rem;
   color: var(--text-soft);
-  padding: 0.2rem 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  padding: 0.28rem 0;
+  line-height: 1.35;
+}
+
+.playlist-track-index {
+  color: var(--muted);
+  margin-right: 0.2rem;
+}
+
+.search-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.search-pagination.hidden {
+  display: none;
+}
+
+.search-page-label {
+  font-size: 0.82rem;
+  color: var(--muted);
 }
 
 .result-actions .btn-add {

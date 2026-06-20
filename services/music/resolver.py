@@ -18,6 +18,8 @@ _YT_VIDEO_ID_RE = re.compile(
     re.I,
 )
 _SEARCH_PREFIXES = ("ytmsearch:", "ytsearch:", "scsearch:")
+SEARCH_PAGE_SIZE = 8
+SEARCH_MAX_RESULTS = 40
 
 
 def is_url(query: str) -> bool:
@@ -159,13 +161,68 @@ def _tracks_from_result(
     return []
 
 
-async def search_media(query: str, *, limit: int = 10) -> list[SearchResult]:
-    """Search and return structured track/playlist results for UI."""
+def _results_from_lavalink(
+    result: wavelink.Search,
+    *,
+    identifier: str,
+) -> list[SearchResult]:
+    if isinstance(result, wavelink.Playlist):
+        if not result.tracks:
+            return []
+        return [playlist_result(result, identifier=identifier)]
+    if isinstance(result, list):
+        return [
+            track_result(t)
+            for t in result
+            if not t.is_stream
+        ]
+    return []
+
+
+def _merge_search_results(
+    hits: list[SearchResult],
+    incoming: list[SearchResult],
+    *,
+    seen: set[str],
+) -> None:
+    for item in incoming:
+        key = item.identifier or f"{item.kind}:{item.title}"
+        if key in seen:
+            continue
+        seen.add(key)
+        hits.append(item)
+
+
+async def _search_sources(q: str) -> list[SearchResult]:
+    """Query Lavalink sources and merge tracks + playlists."""
+    hits: list[SearchResult] = []
+    seen: set[str] = set()
+    sources = (
+        wavelink.TrackSource.YouTube,
+        wavelink.TrackSource.YouTubeMusic,
+        wavelink.TrackSource.SoundCloud,
+    )
+    for source in sources:
+        try:
+            result = await _search(q, source=source)
+        except wavelink.LavalinkLoadException:
+            continue
+        _merge_search_results(
+            hits,
+            _results_from_lavalink(result, identifier=q),
+            seen=seen,
+        )
+    hits.sort(key=lambda item: (0 if item.kind == "playlist" else 1, item.title.lower()))
+    return hits[:SEARCH_MAX_RESULTS]
+
+
+async def search_media_all(query: str) -> list[SearchResult]:
+    """Fetch all search hits (tracks and playlists) for pagination."""
     q = _strip_search_prefix(query.strip())
     if not q:
         return []
 
-    log.info("resolver.search_media query=%r limit=%s", q[:120], limit)
+    log.info("resolver.search_media_all query=%r", q[:120])
 
     if is_url(q):
         if is_youtube_playlist_url(q):
@@ -173,39 +230,52 @@ async def search_media(query: str, *, limit: int = 10) -> list[SearchResult]:
                 result = await _load_url(q)
             except wavelink.LavalinkLoadException:
                 return []
-            if isinstance(result, wavelink.Playlist) and result.tracks:
-                return [playlist_result(result, identifier=q)]
-            return []
+            return _results_from_lavalink(result, identifier=q)
         try:
             result = await _load_url(q)
         except wavelink.LavalinkLoadException:
             return []
-        if isinstance(result, wavelink.Playlist) and result.tracks:
-            return [playlist_result(result, identifier=q)]
-        if isinstance(result, list):
-            return [
-                track_result(t)
-                for t in result[:limit]
-                if not t.is_stream
-            ]
+        items = _results_from_lavalink(result, identifier=q)
+        if items:
+            return items
         return []
 
-    result = await _search(q, source=wavelink.TrackSource.YouTube)
-    if isinstance(result, wavelink.Playlist) and result.tracks:
-        return [playlist_result(result, identifier=q)]
+    return await _search_sources(q)
 
-    tracks = _tracks_from_result(result)
-    if not tracks:
-        result = await _search(q, source=wavelink.TrackSource.SoundCloud)
-        if isinstance(result, wavelink.Playlist) and result.tracks:
-            return [playlist_result(result, identifier=q)]
-        tracks = _tracks_from_result(result)
 
-    return [
-        track_result(t)
-        for t in tracks[:limit]
-        if not t.is_stream
-    ]
+async def search_media(
+    query: str,
+    *,
+    limit: int = SEARCH_PAGE_SIZE,
+    offset: int = 0,
+) -> list[SearchResult]:
+    """Return one page slice of search results."""
+    all_results = await search_media_all(query)
+    return all_results[offset : offset + limit]
+
+
+async def search_media_page(
+    query: str,
+    *,
+    page: int = 0,
+    page_size: int = SEARCH_PAGE_SIZE,
+) -> dict[str, object]:
+    all_results = await search_media_all(query)
+    page = max(0, page)
+    page_size = max(1, min(page_size, SEARCH_MAX_RESULTS))
+    total = len(all_results)
+    start = page * page_size
+    page_items = all_results[start : start + page_size]
+    total_pages = max(1, (total + page_size - 1) // page_size) if total else 0
+    return {
+        "results": page_items,
+        "page": page,
+        "pageSize": page_size,
+        "total": total,
+        "totalPages": total_pages,
+        "hasMore": start + page_size < total,
+        "query": query.strip(),
+    }
 
 
 async def resolve_query(

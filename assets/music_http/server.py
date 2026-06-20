@@ -23,7 +23,6 @@ from core.action_log import log_action
 from core.errors.exceptions import UserFacingError
 from core.loggers import log_http
 from services.music.queue import LoopMode
-from services.music.resolver import search_media
 
 if TYPE_CHECKING:
     from discord.ext import commands
@@ -229,6 +228,7 @@ async def start_music_http(bot: "commands.Bot") -> None:
     async def api_search(request: web.Request) -> web.Response:
         session, _ = session_from_request(request, manager)
         q = request.query.get("q", "").strip()
+        body: dict = {}
         if request.can_read_body and request.content_type == "application/json":
             body = await request.json()
             if not q:
@@ -244,9 +244,29 @@ async def start_music_http(bot: "commands.Bot") -> None:
                 except Exception as exc:
                     return _api_error_response(exc, context="api_search auth")
         if not q:
-            return web.json_response({"results": []})
-        results = await search_media(q, limit=10)
-        return web.json_response({"results": [r.to_dict() for r in results]})
+            return web.json_response({"results": [], "page": 0, "total": 0, "totalPages": 0})
+        page_raw = request.query.get("page") or body.get("page")
+        page_size_raw = (
+            request.query.get("pageSize")
+            or request.query.get("page_size")
+            or body.get("pageSize")
+            or body.get("page_size")
+        )
+        try:
+            page = int(page_raw) if page_raw is not None else 0
+        except (TypeError, ValueError):
+            page = 0
+        try:
+            page_size = int(page_size_raw) if page_size_raw is not None else None
+        except (TypeError, ValueError):
+            page_size = None
+        payload = await session.get_search_page(q, page=page, page_size=page_size)
+        return web.json_response(
+            {
+                **{k: v for k, v in payload.items() if k != "results"},
+                "results": [r.to_dict() for r in payload["results"]],
+            }
+        )
 
     async def api_queue_add(request: web.Request) -> web.Response:
         try:

@@ -14,7 +14,6 @@ from core.errors.exceptions import UserFacingError
 from core.loggers import log_ui
 from services.music.permissions import can_control, can_queue, require_voice
 from services.music.queue import LoopMode
-from services.music.resolver import search_media
 from ui.views.music_panel_support import (
     MusicPanelState,
     QUEUE_PAGE_SIZE,
@@ -70,8 +69,8 @@ class _QueryModal(discord.ui.Modal, title="Play music"):
                 await self.state.session.play_query(member, q)
                 await refresh_panel_message(self.state.session, self.state.bot)
             else:
-                results = await search_media(q, limit=10)
-                if not results:
+                page_data = await self.state.session.get_search_page(q, page=0)
+                if not page_data["results"]:
                     raise UserFacingError("No results found.")
 
                 async def on_added() -> None:
@@ -79,12 +78,19 @@ class _QueryModal(discord.ui.Modal, title="Play music"):
 
                 view = MusicSearchView(
                     self.state.session,
-                    results,
+                    q,
+                    page_data,
                     interaction.user.id,
                     self.state.bot,
                     on_track_added=on_added,
                 )
-                embed = search_results_embed(results, q)
+                embed = search_results_embed(
+                    page_data["results"],
+                    q,
+                    page=page_data["page"],
+                    total_pages=page_data["totalPages"],
+                    total=page_data["total"],
+                )
                 await interaction.followup.send(embed=embed, view=view, ephemeral=True)
                 try:
                     await refresh_panel_message(

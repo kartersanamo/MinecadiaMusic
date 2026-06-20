@@ -86,6 +86,9 @@
   let positionAt = Date.now();
   let progressTimer = null;
   let searchLoading = false;
+  let searchPage = 0;
+  let searchTotalPages = 0;
+  let searchQuery = "";
   let sessionExpired = false;
   let activityBootstrapFailed = false;
 
@@ -117,6 +120,7 @@
     btnSearch: document.getElementById("btnSearch"),
     searchEmpty: document.getElementById("searchEmpty"),
     searchResults: document.getElementById("searchResults"),
+    searchPagination: document.getElementById("searchPagination"),
     queueList: document.getElementById("queueList"),
     queueEmpty: document.getElementById("queueEmpty"),
     queueCount: document.getElementById("queueCount"),
@@ -702,12 +706,49 @@
     await refresh();
   }
 
-  function renderSearchResults(results) {
+  function playlistTracksHtml(tracks) {
+    if (!tracks || !tracks.length) return "";
+    return (
+      '<ol class="playlist-tracks">' +
+      tracks
+        .map(
+          (track, idx) =>
+            `<li><span class="playlist-track-index">${idx + 1}.</span> ${linkHtml(track.title, track, { className: "track-link" })} — ${escapeHtml(track.author || "Unknown")}${track.durationText ? ` · ${escapeHtml(track.durationText)}` : ""}</li>`
+        )
+        .join("") +
+      "</ol>"
+    );
+  }
+
+  function renderSearchPagination(meta) {
+    const el = els.searchPagination;
+    if (!el) return;
+    if (!meta || meta.totalPages <= 1) {
+      el.classList.add("hidden");
+      el.innerHTML = "";
+      return;
+    }
+    el.classList.remove("hidden");
+    const page = meta.page ?? 0;
+    const totalPages = meta.totalPages ?? 1;
+    const total = meta.total ?? 0;
+    el.innerHTML = `
+      <button type="button" class="btn btn-ghost btn-sm" id="searchPrev" ${page <= 0 ? "disabled" : ""}>◀ Prev</button>
+      <span class="search-page-label">Page ${page + 1} of ${totalPages} · ${total} results</span>
+      <button type="button" class="btn btn-ghost btn-sm" id="searchNext" ${page >= totalPages - 1 ? "disabled" : ""}>Next ▶</button>`;
+    const prev = el.querySelector("#searchPrev");
+    const next = el.querySelector("#searchNext");
+    if (prev) prev.onclick = () => runSearch(page - 1);
+    if (next) next.onclick = () => runSearch(page + 1);
+  }
+
+  function renderSearchResults(results, meta) {
     els.searchResults.innerHTML = "";
     if (!results.length) {
       els.searchResults.classList.add("hidden");
       els.searchEmpty.textContent = "No results — try another search or paste a direct link.";
       els.searchEmpty.classList.remove("hidden");
+      renderSearchPagination(null);
       return;
     }
     els.searchEmpty.classList.add("hidden");
@@ -723,16 +764,8 @@
         : `${escapeHtml(t.author || "Unknown")}${t.durationText ? ` · ${escapeHtml(t.durationText)}` : ""}`;
 
       let tracksHtml = "";
-      if (isPlaylist && (t.tracks || []).length) {
-        tracksHtml =
-          '<ol class="playlist-tracks">' +
-          t.tracks
-            .map(
-              (track, idx) =>
-                `<li>${idx + 1}. ${linkHtml(track.title, track, { className: "track-link" })} — ${escapeHtml(track.author)}</li>`
-            )
-            .join("") +
-          "</ol>";
+      if (isPlaylist) {
+        tracksHtml = playlistTracksHtml(t.tracks || []);
       }
 
       const openLink = externalUrl(t);
@@ -765,20 +798,30 @@
       }
       els.searchResults.appendChild(card);
     });
+    renderSearchPagination(meta);
   }
 
-  async function runSearch() {
+  async function runSearch(page = 0) {
     const q = els.searchInput.value.trim();
     if (!q || searchLoading) return;
+    if (page === 0 || q !== searchQuery) {
+      searchQuery = q;
+      searchPage = 0;
+      page = 0;
+    } else {
+      searchPage = page;
+    }
     searchLoading = true;
     els.btnSearch.disabled = true;
     els.btnSearch.innerHTML = '<span class="spinner"></span>Searching';
     try {
       const data = await api(`/search?q=${encodeURIComponent(q)}`, {
         method: "POST",
-        body: JSON.stringify({ userId, query: q }),
+        body: JSON.stringify({ userId, query: q, page, pageSize: 8 }),
       });
-      renderSearchResults(data.results || []);
+      searchPage = data.page ?? page;
+      searchTotalPages = data.totalPages ?? 0;
+      renderSearchResults(data.results || [], data);
     } catch (e) {
       toast(e.message);
     } finally {
@@ -811,9 +854,9 @@
     control("volume", { level: parseInt(e.target.value, 10) });
   });
 
-  els.btnSearch.addEventListener("click", runSearch);
+  els.btnSearch.addEventListener("click", () => runSearch(0));
   els.searchInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") runSearch();
+    if (e.key === "Enter") runSearch(0);
   });
 
   els.btnLogin.addEventListener("click", async () => {

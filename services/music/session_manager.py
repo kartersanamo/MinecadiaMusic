@@ -51,6 +51,38 @@ class GuildMusicSession:
         self._activity_log: list[dict[str, Any]] = []
         self._persist_task: Optional[asyncio.Task] = None
         self._queue_page = 0
+        self._search_cache_key: Optional[str] = None
+        self._search_cache_results: list[Any] = []
+
+    async def get_search_page(
+        self,
+        query: str,
+        *,
+        page: int = 0,
+        page_size: int | None = None,
+    ) -> dict[str, Any]:
+        from services.music.resolver import SEARCH_PAGE_SIZE, search_media_all
+
+        q = query.strip()
+        size = page_size or int(_music_cfg().get("SEARCH_PAGE_SIZE", SEARCH_PAGE_SIZE))
+        size = max(1, min(size, 40))
+        if self._search_cache_key != q:
+            self._search_cache_results = await search_media_all(q)
+            self._search_cache_key = q
+        page = max(0, page)
+        total = len(self._search_cache_results)
+        start = page * size
+        page_items = self._search_cache_results[start : start + size]
+        total_pages = max(1, (total + size - 1) // size) if total else 0
+        return {
+            "results": page_items,
+            "page": page,
+            "pageSize": size,
+            "total": total,
+            "totalPages": total_pages,
+            "hasMore": start + size < total,
+            "query": q,
+        }
 
     def _queue_length(self) -> int:
         player = self.get_player()

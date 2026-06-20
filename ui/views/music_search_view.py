@@ -21,9 +21,16 @@ def _link_button(url: str | None, *, label: str = "Open source") -> discord.ui.B
     return discord.ui.Button(label=label, style=discord.ButtonStyle.link, url=url)
 
 
-def search_results_embed(results: list[SearchResult], query: str) -> discord.Embed:
+def search_results_embed(
+    results: list[SearchResult],
+    query: str,
+    *,
+    page: int = 0,
+    total_pages: int = 1,
+    total: int | None = None,
+) -> discord.Embed:
     lines: list[str] = []
-    for i, item in enumerate(results[:10], 1):
+    for i, item in enumerate(results, 1):
         link = markdown_link(item.title, item.uri, item.identifier)
         if item.kind == "playlist":
             lines.append(f"`{i}.` {link} — *{item.track_count} tracks* · {item.author}")
@@ -39,7 +46,11 @@ def search_results_embed(results: list[SearchResult], query: str) -> discord.Emb
         description=description,
         color=_embed_color(),
     )
-    embed.set_footer(text=f"Query: {query[:80]}")
+    footer = f"Query: {query[:60]}"
+    if total_pages > 1:
+        count = total if total is not None else len(results)
+        footer += f" · Page {page + 1}/{total_pages} · {count} results"
+    embed.set_footer(text=footer)
     first_url = external_url(results[0].uri, results[0].identifier) if results else None
     if first_url:
         embed.url = first_url
@@ -48,11 +59,15 @@ def search_results_embed(results: list[SearchResult], query: str) -> discord.Emb
 
 def _playlist_embed(item: SearchResult) -> discord.Embed:
     lines = []
-    for i, t in enumerate(item.tracks[:20], 1):
+    for i, t in enumerate(item.tracks, 1):
         link = markdown_link(t.title, t.uri, t.identifier)
-        lines.append(f"`{i}.` {link} — {t.author}")
-    if item.track_count > 20:
-        lines.append(f"*+ {item.track_count - 20} more tracks*")
+        dur = f" · `{_format_ms(t.duration_ms)}`" if t.duration_ms else ""
+        lines.append(f"`{i}.` {link} — {t.author}{dur}")
+        if len("\n".join(lines)) > 3800:
+            remaining = item.track_count - i
+            if remaining > 0:
+                lines.append(f"*+ {remaining} more tracks — use **Open playlist** below*")
+            break
     embed = discord.Embed(
         title=f"Playlist: {item.title}",
         description="\n".join(lines) if lines else "*Empty playlist*",
@@ -161,11 +176,30 @@ class MusicPlaylistConfirmView(discord.ui.View):
         self.stop()
 
 
+class _SearchPageButton(discord.ui.Button):
+    def __init__(self, direction: int, *, disabled: bool = False):
+        super().__init__(
+            label="◀ Prev" if direction < 0 else "Next ▶",
+            style=discord.ButtonStyle.secondary,
+            custom_id="mp_search_prev" if direction < 0 else "mp_search_next",
+            disabled=disabled,
+            row=1,
+        )
+        self._direction = direction
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, MusicSearchView):
+            return
+        await view.change_page(interaction, view.page + self._direction)
+
+
 class MusicSearchView(discord.ui.View):
     def __init__(
         self,
         session,
-        results: list[SearchResult],
+        query: str,
+        page_data: dict,
         requester_id: int,
         bot,
         *,
@@ -173,12 +207,16 @@ class MusicSearchView(discord.ui.View):
     ):
         super().__init__(timeout=120)
         self.session = session
-        self._results = results
+        self.query = query
+        self.page = int(page_data.get("page", 0))
+        self.total_pages = int(page_data.get("totalPages", 1))
         self.requester_id = requester_id
         self.bot = bot
         self.on_track_added = on_track_added
+        self._results: list[SearchResult] = list(page_data.get("results") or [])
+
         options = []
-        for i, item in enumerate(results[:25]):
+        for i, item in enumerate(self._results[:25]):
             if item.kind == "playlist":
                 label = f"Playlist: {item.title}"[:100]
                 desc = f"{item.track_count} tracks · {item.author}"[:100]
@@ -196,6 +234,34 @@ class MusicSearchView(discord.ui.View):
         )
         select.callback = self._on_select
         self.add_item(select)
+
+        if self.total_pages > 1:
+            self.add_item(_SearchPageButton(-1, disabled=self.page <= 0))
+            self.add_item(_SearchPageButton(1, disabled=self.page >= self.total_pages - 1))
+
+    async def change_page(self, interaction: discord.Interaction, new_page: int) -> None:
+        await interaction.response.defer()
+        data = await self.session.get_search_page(self.query, page=new_page)
+        if not data["results"]:
+            await interaction.followup.send("No more results on that page.", ephemeral=True)
+            return
+        view = MusicSearchView(
+            self.session,
+            self.query,
+            data,
+            self.requester_id,
+            self.bot,
+            on_track_added=self.on_track_added,
+        )
+        embed = search_results_embed(
+            data["results"],
+            self.query,
+            page=data["page"],
+            total_pages=data["totalPages"],
+            total=data["total"],
+        )
+        await interaction.edit_original_response(embed=embed, view=view)
+        self.stop()
 
     async def _on_select(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
