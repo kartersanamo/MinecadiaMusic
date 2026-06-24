@@ -40,7 +40,9 @@ class Client(commands.Bot):
     @task("Update Presence")
     async def update_presence(self):
         presence = ConfigManager.get("PRESENCE")
-        await client.change_presence(activity=discord.Game(name=presence))
+        activity = discord.Game(name=presence)
+        self._presence_activity = activity
+        await client.change_presence(activity=activity)
         log_tasks.info(f"Updated the bot's presence to {presence}")
 
     @task("Remove Help")
@@ -101,6 +103,7 @@ class Client(commands.Bot):
         from core.liveness import mark_connected
 
         mark_connected()
+        await self.update_presence()
         log_tasks.info("Bot connection resumed")
 
     @task("Logging in")

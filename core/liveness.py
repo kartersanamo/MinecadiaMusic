@@ -134,6 +134,20 @@ def _websocket_healthy(bot: commands.Bot) -> None:
         raise RuntimeError(f"Gateway latency unhealthy: {latency}")
 
 
+def _resolve_probe_activity(bot: commands.Bot) -> discord.BaseActivity | None:
+    """Resolve configured activity for gateway probes; never clear presence with None."""
+    stored = getattr(bot, "_presence_activity", None)
+    if isinstance(stored, discord.BaseActivity):
+        return stored
+    if bot.activity and isinstance(bot.activity, discord.BaseActivity):
+        return bot.activity
+    for guild in bot.guilds:
+        me = guild.me
+        if me is not None and me.activities:
+            return me.activities[0]
+    return None
+
+
 async def _probe_discord(bot: commands.Bot) -> None:
     if not bot.user:
         raise RuntimeError("Bot user not available")
@@ -144,10 +158,10 @@ async def _probe_discord(bot: commands.Bot) -> None:
     await asyncio.wait_for(bot.fetch_user(bot.user.id), timeout=15.0)
 
     # Presence updates go through the gateway; catches zombie REST-only states.
-    activity = None
-    if bot.activity:
-        activity = bot.activity
-    await asyncio.wait_for(bot.change_presence(activity=activity), timeout=15.0)
+    # change_presence(activity=None) clears the status — only probe when we have one.
+    activity = _resolve_probe_activity(bot)
+    if activity is not None:
+        await asyncio.wait_for(bot.change_presence(activity=activity), timeout=15.0)
 
 
 async def _verify_gateway(bot: commands.Bot, log: logging.Logger, bot_name: str) -> None:
