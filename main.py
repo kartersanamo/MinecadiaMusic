@@ -24,7 +24,9 @@ COG_FILES = [file.split(".")[0].title() for file in os.listdir("cogs/") if file.
 
 class Client(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix=".", intents=discord.Intents().all())
+        intents = discord.Intents.default()
+        intents.voice_states = True
+        super().__init__(command_prefix=".", intents=intents)
         wire_bot(self, bot_name="Music", log_commands=log_commands, log_tasks=log_tasks)
         install_activity_entry_point(self)
 
